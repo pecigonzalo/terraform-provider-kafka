@@ -5,8 +5,9 @@ import (
 	"flag"
 	"log"
 
+	"github.com/pecigonzalo/terraform-provider-msk/internal/provider"
+
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
-	"github.com/hashicorp/terraform-provider-scaffolding-framework/internal/provider"
 )
 
 // Run "go generate" to format example terraform files and generate the docs for the registry/website
@@ -23,9 +24,6 @@ var (
 	// these will be set by the goreleaser configuration
 	// to appropriate values for the compiled binary
 	version string = "dev"
-
-	// goreleaser can also pass the specific commit if you want
-	// commit  string = ""
 )
 
 func main() {
@@ -35,8 +33,7 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		// TODO: Update this string with the published name of your provider.
-		Address: "registry.terraform.io/hashicorp/scaffolding",
+		Address: "registry.terraform.io/pecigonzalo/msk",
 		Debug:   debug,
 	}
 

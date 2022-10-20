@@ -1,3 +1,3 @@
-resource "scaffolding_example" "example" {
+resource "msk_topic" "example" {
   configurable_attribute = "some-value"
 }

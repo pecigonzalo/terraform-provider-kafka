@@ -1,4 +1,4 @@
-module github.com/hashicorp/terraform-provider-scaffolding-framework
+module github.com/pecigonzalo/terraform-provider-msk
 
 go 1.18
 

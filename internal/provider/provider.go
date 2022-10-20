@@ -12,29 +12,29 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// Ensure ScaffoldingProvider satisfies various provider interfaces.
-var _ provider.Provider = &ScaffoldingProvider{}
-var _ provider.ProviderWithMetadata = &ScaffoldingProvider{}
+// Ensure MskProvider satisfies various provider interfaces.
+var _ provider.Provider = &MskProvider{}
+var _ provider.ProviderWithMetadata = &MskProvider{}
 
-// ScaffoldingProvider defines the provider implementation.
-type ScaffoldingProvider struct {
+// MskProvider defines the provider implementation.
+type MskProvider struct {
 	// version is set to the provider version on release, "dev" when the
 	// provider is built and ran locally, and "test" when running acceptance
 	// testing.
 	version string
 }
 
-// ScaffoldingProviderModel describes the provider data model.
-type ScaffoldingProviderModel struct {
+// MskProviderModel describes the provider data model.
+type MskProviderModel struct {
 	Endpoint types.String `tfsdk:"endpoint"`
 }
 
-func (p *ScaffoldingProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "scaffolding"
+func (p *MskProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "msk"
 	resp.Version = p.version
 }
 
-func (p *ScaffoldingProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
+func (p *MskProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
 	return tfsdk.Schema{
 		Attributes: map[string]tfsdk.Attribute{
 			"endpoint": {
@@ -44,10 +44,27 @@ func (p *ScaffoldingProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag
 			},
 		},
 	}, nil
+	// return tfsdk.Schema{
+	// 	Attributes: map[string]tfsdk.Attribute{
+	// 		"bootstrap_servers": {
+	// 			MarkdownDescription: "A list of kafka brokers",
+	// 			// Required:            true,
+	// 			Optional: true,
+	// 			Type: types.ListType{
+	// 				ElemType: types.StringType,
+	// 			},
+	// 		},
+	// 		"tls_enabled": {
+	// 			MarkdownDescription: "A list of kafka brokers",
+	// 			Optional:            true,
+	// 			Type:                types.BoolType,
+	// 		},
+	// 	},
+	// }, nil
 }
 
-func (p *ScaffoldingProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	var data ScaffoldingProviderModel
+func (p *MskProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var data MskProviderModel
 
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 
@@ -64,13 +81,13 @@ func (p *ScaffoldingProvider) Configure(ctx context.Context, req provider.Config
 	resp.ResourceData = client
 }
 
-func (p *ScaffoldingProvider) Resources(ctx context.Context) []func() resource.Resource {
+func (p *MskProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewExampleResource,
+		NewTopicResource,
 	}
 }
 
-func (p *ScaffoldingProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+func (p *MskProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewExampleDataSource,
 	}
@@ -78,7 +95,7 @@ func (p *ScaffoldingProvider) DataSources(ctx context.Context) []func() datasour
 
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &ScaffoldingProvider{
+		return &MskProvider{
 			version: version,
 		}
 	}

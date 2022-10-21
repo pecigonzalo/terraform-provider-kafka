@@ -23,6 +23,7 @@
                 goreleaser
                 gnumake
                 terraform
+                topicctl
               ];
           };
       });

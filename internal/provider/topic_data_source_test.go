@@ -22,8 +22,8 @@ func TestAccExampleDataSource(t *testing.T) {
 	})
 }
 
-const testAccExampleDataSourceConfig = `
+const testAccExampleDataSourceConfig = providerConfig + `
 data "msk_topic" "test" {
-  configurable_attribute = "example"
+  name = "example"
 }
 `

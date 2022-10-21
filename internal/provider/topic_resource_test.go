@@ -44,7 +44,7 @@ func TestAccExampleResource(t *testing.T) {
 }
 
 func testAccExampleResourceConfig(configurableAttribute string) string {
-	return fmt.Sprintf(`
+	return fmt.Sprintf(providerConfig+`
 resource "msk_topic" "test" {
   configurable_attribute = %[1]q
 }

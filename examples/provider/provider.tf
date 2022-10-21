@@ -6,6 +6,7 @@ terraform {
   }
 }
 
-provider "msk" {}
-
-data "msk_topic" "example" {}
+provider "msk" {
+  bootstrap_servers = ["localhost:9198"]
+  tls_enabled       = true
+}

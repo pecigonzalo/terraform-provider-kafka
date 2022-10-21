@@ -12,3 +12,7 @@ install:
 .PHONY: plan
 plan: install
 	terraform -chdir=./examples/provider/ plan
+
+.PHONY: apply
+apply: install
+	terraform -chdir=./examples/provider/ apply

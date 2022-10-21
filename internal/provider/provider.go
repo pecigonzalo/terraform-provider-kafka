@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -10,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/segmentio/topicctl/pkg/admin"
 )
 
 // Ensure MskProvider satisfies various provider interfaces.
@@ -26,7 +26,8 @@ type MskProvider struct {
 
 // MskProviderModel describes the provider data model.
 type MskProviderModel struct {
-	Endpoint types.String `tfsdk:"endpoint"`
+	BootstrapServers []types.String `tfsdk:"bootstrap_servers"`
+	TLSEnabled       types.Bool     `tfsdk:"tls_enabled"`
 }
 
 func (p *MskProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -37,46 +38,54 @@ func (p *MskProvider) Metadata(ctx context.Context, req provider.MetadataRequest
 func (p *MskProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
 	return tfsdk.Schema{
 		Attributes: map[string]tfsdk.Attribute{
-			"endpoint": {
-				MarkdownDescription: "Example provider attribute",
+			"bootstrap_servers": {
+				MarkdownDescription: "A list of kafka brokers",
+				Required:            true,
+				Type: types.ListType{
+					ElemType: types.StringType,
+				},
+			},
+			"tls_enabled": {
+				MarkdownDescription: "A list of kafka brokers",
 				Optional:            true,
-				Type:                types.StringType,
+				Type:                types.BoolType,
 			},
 		},
 	}, nil
-	// return tfsdk.Schema{
-	// 	Attributes: map[string]tfsdk.Attribute{
-	// 		"bootstrap_servers": {
-	// 			MarkdownDescription: "A list of kafka brokers",
-	// 			// Required:            true,
-	// 			Optional: true,
-	// 			Type: types.ListType{
-	// 				ElemType: types.StringType,
-	// 			},
-	// 		},
-	// 		"tls_enabled": {
-	// 			MarkdownDescription: "A list of kafka brokers",
-	// 			Optional:            true,
-	// 			Type:                types.BoolType,
-	// 		},
-	// 	},
-	// }, nil
 }
 
 func (p *MskProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	var data MskProviderModel
+	var config MskProviderModel
 
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Configuration values are now available.
-	// if data.Endpoint.IsNull() { /* ... */ }
+	brokerConfig := admin.BrokerAdminClientConfig{
+		ConnectorConfig: admin.ConnectorConfig{
+			BrokerAddr: config.BootstrapServers[0].Value,
+			TLS: admin.TLSConfig{
+				Enabled: config.TLSEnabled.Value,
+			},
+			SASL: admin.SASLConfig{
+				Enabled:   true,
+				Mechanism: admin.SASLMechanismAWSMSKIAM,
+			},
+		},
+		ReadOnly: false,
+	}
+	client, err := admin.NewBrokerAdminClient(
+		ctx,
+		brokerConfig,
+	)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to create MSK client",
+			"An unexpected error occurred when creating the Kafka client"+
+				"Kafka Error:"+err.Error())
+	}
 
-	// Example client configuration for data sources and resources
-	client := http.DefaultClient
 	resp.DataSourceData = client
 	resp.ResourceData = client
 }
@@ -89,7 +98,7 @@ func (p *MskProvider) Resources(ctx context.Context) []func() resource.Resource 
 
 func (p *MskProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
-		NewExampleDataSource,
+		NewTopicDataSource,
 	}
 }
 

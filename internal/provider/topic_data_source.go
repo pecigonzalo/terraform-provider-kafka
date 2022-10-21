@@ -3,31 +3,35 @@ package provider
 import (
 	"context"
 	"fmt"
-	"net/http"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/segmentio/topicctl/pkg/admin"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces
 var _ datasource.DataSource = &TopicDataSource{}
 
-func NewExampleDataSource() datasource.DataSource {
+func NewTopicDataSource() datasource.DataSource {
 	return &TopicDataSource{}
 }
 
 // TopicDataSource defines the data source implementation.
 type TopicDataSource struct {
-	client *http.Client
+	client *admin.BrokerAdminClient
 }
 
 // TopicDataSourceModel describes the data source data model.
 type TopicDataSourceModel struct {
-	ConfigurableAttribute types.String `tfsdk:"configurable_attribute"`
-	Id                    types.String `tfsdk:"id"`
+	Name              types.String `tfsdk:"name"`
+	Partitions        types.Int64  `tfsdk:"partitions"`
+	ReplicationFactor types.Int64  `tfsdk:"replication_factor"`
+	Version           types.Int64  `tfsdk:"version"`
+	Config            types.Map    `tfsdk:"configuration"`
 }
 
 func (d *TopicDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -36,18 +40,32 @@ func (d *TopicDataSource) Metadata(ctx context.Context, req datasource.MetadataR
 
 func (d *TopicDataSource) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
 	return tfsdk.Schema{
-		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "Example data source",
+		MarkdownDescription: "Topic data source",
 
 		Attributes: map[string]tfsdk.Attribute{
-			"configurable_attribute": {
-				MarkdownDescription: "Example configurable attribute",
-				Optional:            true,
+			"name": {
+				MarkdownDescription: "Topic name",
 				Type:                types.StringType,
+				Required:            true,
 			},
-			"id": {
-				MarkdownDescription: "Example identifier",
-				Type:                types.StringType,
+			"partitions": {
+				MarkdownDescription: "Topic partitions count",
+				Type:                types.Int64Type,
+				Computed:            true,
+			},
+			"replication_factor": {
+				MarkdownDescription: "Topic replication factor",
+				Type:                types.Int64Type,
+				Computed:            true,
+			},
+			"version": {
+				MarkdownDescription: "Topic version",
+				Type:                types.Int64Type,
+				Computed:            true,
+			},
+			"configuration": {
+				MarkdownDescription: "Configuration version",
+				Type:                types.MapType{ElemType: types.StringType},
 				Computed:            true,
 			},
 		},
@@ -60,7 +78,7 @@ func (d *TopicDataSource) Configure(ctx context.Context, req datasource.Configur
 		return
 	}
 
-	client, ok := req.ProviderData.(*http.Client)
+	client, ok := req.ProviderData.(*admin.BrokerAdminClient)
 
 	if !ok {
 		resp.Diagnostics.AddError(
@@ -84,17 +102,31 @@ func (d *TopicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
-	// If applicable, this is a great opportunity to initialize any necessary
-	// provider client data and make a call using it.
-	// httpResp, err := d.client.Do(httpReq)
-	// if err != nil {
-	//     resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read example, got error: %s", err))
-	//     return
-	// }
+	topicInfo, err := d.client.GetTopic(ctx, data.Name.Value, true)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
+		return
+	}
 
-	// For the purposes of this example code, hardcoding a response value to
-	// save into the Terraform state.
-	data.Id = types.String{Value: "example-id"}
+	replicationFactor, err := replicaCount(topicInfo)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to get replica count, got error: %s", err))
+		return
+	}
+
+	data.Name = types.String{Value: topicInfo.Name}
+	data.Partitions = types.Int64{Value: int64(len(topicInfo.Partitions))}
+	data.ReplicationFactor = types.Int64{Value: int64(replicationFactor)}
+	data.Version = types.Int64{Value: int64(topicInfo.Version)}
+
+	configElement := make(map[string]attr.Value)
+	for k, v := range topicInfo.Config {
+		configElement[k] = types.String{Value: v}
+	}
+	data.Config = types.Map{
+		ElemType: types.StringType,
+		Elems:    configElement,
+	}
 
 	// Write logs using the tflog package
 	// Documentation: https://terraform.io/plugin/log

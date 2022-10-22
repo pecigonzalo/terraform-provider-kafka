@@ -11,8 +11,8 @@ install:
 
 .PHONY: plan
 plan: install
-	terraform -chdir=./examples/provider/ plan
+	terraform -chdir=./examples/end-to-end/ plan
 
 .PHONY: apply
 apply: install
-	terraform -chdir=./examples/provider/ apply
+	terraform -chdir=./examples/end-to-end/ apply

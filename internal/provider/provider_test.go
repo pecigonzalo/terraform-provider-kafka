@@ -14,8 +14,13 @@ const (
 	// such as updating the Makefile and running the testing through that tool.
 	providerConfig = `
 provider "msk" {
-  bootstrap_servers = ["some-server:9198"]
-  tls_enabled       = true
+  bootstrap_servers = ["127.0.0.1:9092"]
+  tls = {
+    enabled = false
+  }
+  sasl = {
+    enabled = false
+  }
 }
 `
 )

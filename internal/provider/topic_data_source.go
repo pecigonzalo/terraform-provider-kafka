@@ -27,6 +27,7 @@ type TopicDataSource struct {
 
 // TopicDataSourceModel describes the data source data model.
 type TopicDataSourceModel struct {
+	ID                types.String `tfsdk:"id"`
 	Name              types.String `tfsdk:"name"`
 	Partitions        types.Int64  `tfsdk:"partitions"`
 	ReplicationFactor types.Int64  `tfsdk:"replication_factor"`
@@ -43,6 +44,10 @@ func (d *TopicDataSource) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Dia
 		MarkdownDescription: "Topic data source",
 
 		Attributes: map[string]tfsdk.Attribute{
+			"id": {
+				Type:     types.StringType,
+				Computed: true,
+			},
 			"name": {
 				MarkdownDescription: "Topic name",
 				Type:                types.StringType,
@@ -114,6 +119,7 @@ func (d *TopicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
+	data.ID = types.String{Value: topicInfo.Name}
 	data.Name = types.String{Value: topicInfo.Name}
 	data.Partitions = types.Int64{Value: int64(len(topicInfo.Partitions))}
 	data.ReplicationFactor = types.Int64{Value: int64(replicationFactor)}

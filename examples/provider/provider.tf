@@ -7,6 +7,11 @@ terraform {
 }
 
 provider "msk" {
-  bootstrap_servers = ["localhost:9198"]
-  tls_enabled       = true
+  bootstrap_servers = ["127.0.0.1:9092"]
+  tls = {
+    enabled = false
+  }
+  sasl = {
+    enabled = false
+  }
 }

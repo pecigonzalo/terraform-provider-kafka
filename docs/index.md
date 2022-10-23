@@ -22,8 +22,13 @@ terraform {
 }
 
 provider "msk" {
-  bootstrap_servers = ["localhost:9198"]
-  tls_enabled       = true
+  bootstrap_servers = ["127.0.0.1:9092"]
+  tls = {
+    enabled = false
+  }
+  sasl = {
+    enabled = false
+  }
 }
 ```
 
@@ -32,8 +37,29 @@ provider "msk" {
 
 ### Required
 
-- `bootstrap_servers` (List of String) A list of kafka brokers
+- `bootstrap_servers` (List of String) A list of Kafka brokers
 
 ### Optional
 
-- `tls_enabled` (Boolean) A list of kafka brokers
+- `sasl` (Attributes) SASL Authentication (see [below for nested schema](#nestedatt--sasl))
+- `timeout` (Number) Timeout for provider operations (default: 300)
+- `tls` (Attributes) TLS Configuration (see [below for nested schema](#nestedatt--tls))
+
+<a id="nestedatt--sasl"></a>
+### Nested Schema for `sasl`
+
+Optional:
+
+- `enabled` (Boolean) Enable SASL Authentication
+- `mechanism` (String) SASL mechanism to use. One of plain, scram-sha512, scram-sha256, aws-msk-iam (default: aws-msk-iam)
+- `password` (String, Sensitive) Password for SASL authentication
+- `username` (String, Sensitive) Username for SASL authentication
+
+
+<a id="nestedatt--tls"></a>
+### Nested Schema for `tls`
+
+Optional:
+
+- `enabled` (Boolean) Enable TLS communication with Kafka brokers (default: true)
+- `skip_verify` (Boolean) Skips TLS verification when connecting to the brokers (default: false)

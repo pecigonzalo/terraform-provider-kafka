@@ -156,8 +156,7 @@ func (r *TopicResource) Create(ctx context.Context, req resource.CreateRequest, 
 	}
 	for _, v := range clientResp.Errors {
 		if v != nil {
-			kafkaError := v.(kafka.Error)
-			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to create topic, got error: %s", kafkaError.Error()))
+			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to create topic, got error: %s", v))
 			return
 		}
 	}
@@ -481,7 +480,14 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 			)
 		}
 	}
-	picker := pickers.NewClusterUsePicker(brokersInfo, nonAppliedTopics)
+
+	for _, b := range brokersInfo {
+		tflog.Warn(ctx, b.Rack)
+	}
+
+	// picker := pickers.NewClusterUsePicker(brokersInfo, nonAppliedTopics)
+	picker := pickers.NewRandomizedPicker()
+	// picker := pickers.NewClusterUsePicker(brokersInfo, nonAppliedTopics)
 
 	extender := extenders.NewBalancedExtender(
 		brokersInfo,

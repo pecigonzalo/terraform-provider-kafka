@@ -15,7 +15,10 @@ func TestAccExampleDataSource(t *testing.T) {
 			{
 				Config: testAccExampleDataSourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.msk_topic.test", "id", "example-id"),
+					resource.TestCheckResourceAttr("data.msk_topic.test", "id", "example"),
+					resource.TestCheckResourceAttr("data.msk_topic.test", "name", "example"),
+					resource.TestCheckResourceAttr("data.msk_topic.test", "partitions", "3"),
+					resource.TestCheckResourceAttr("data.msk_topic.test", "replication_factor", "3"),
 				),
 			},
 		},

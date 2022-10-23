@@ -14,7 +14,11 @@ func TestAccExampleResource(t *testing.T) {
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccExampleResourceConfig("one"),
+				Config: testAccExampleResourceConfig(
+					"one",
+					3,
+					3,
+				),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("msk_topic.test", "configurable_attribute", "one"),
 					resource.TestCheckResourceAttr("msk_topic.test", "id", "example-id"),
@@ -33,7 +37,11 @@ func TestAccExampleResource(t *testing.T) {
 			},
 			// Update and Read testing
 			{
-				Config: testAccExampleResourceConfig("two"),
+				Config: testAccExampleResourceConfig(
+					"two",
+					3,
+					3,
+				),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("msk_topic.test", "configurable_attribute", "two"),
 				),
@@ -43,10 +51,12 @@ func TestAccExampleResource(t *testing.T) {
 	})
 }
 
-func testAccExampleResourceConfig(configurableAttribute string) string {
+func testAccExampleResourceConfig(name string, partitions int, replication_factor int) string {
 	return fmt.Sprintf(providerConfig+`
 resource "msk_topic" "test" {
-  configurable_attribute = %[1]q
+  name = %[1]q
+  partitions = %v
+  replication_factor = %v
 }
-`, configurableAttribute)
+`, name, partitions, replication_factor)
 }

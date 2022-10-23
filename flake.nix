@@ -1,5 +1,5 @@
 {
-  description = "A Nix wrapperd development environment";
+  description = "A Nix wrapped development environment";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/22.05";

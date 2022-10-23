@@ -1,23 +1,32 @@
-# Terraform Provider Scaffolding (Terraform Plugin Framework)
+# Terraform Kafka Provider
 
-_This template repository is built on the [Terraform Plugin Framework](https://github.com/hashicorp/terraform-plugin-framework). The template repository built on the [Terraform Plugin SDK](https://github.com/hashicorp/terraform-plugin-sdk) can be found at [terraform-provider-scaffolding](https://github.com/hashicorp/terraform-provider-scaffolding). See [Which SDK Should I Use?](https://www.terraform.io/docs/plugin/which-sdk.html) in the Terraform documentation for additional information._
+A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmentio/kafka-go).
 
-This repository is a *template* for a [Terraform](https://www.terraform.io) provider. It is intended as a starting point for creating Terraform providers, containing:
+## State
 
-- A resource and a data source (`internal/provider/`),
-- Examples (`examples/`) and generated documentation (`docs/`),
-- Miscellaneous meta files.
-
-These files contain boilerplate code that you will need to edit to create your own Terraform provider. Tutorials for creating Terraform providers can be found on the [HashiCorp Learn](https://learn.hashicorp.com/collections/terraform/providers-plugin-framework) platform. _Terraform Plugin Framework specific guides are titled accordingly._
-
-Please see the [GitHub template repository documentation](https://help.github.com/en/github/creating-cloning-and-archiving-repositories/creating-a-repository-from-a-template) for how to create a new repository from this template on GitHub.
-
-Once you've written your provider, you'll want to [publish it on the Terraform Registry](https://www.terraform.io/docs/registry/providers/publishing.html) so that others can use it.
+- [x] Authentication
+  - [x] SASL
+    - [x] IAM
+    - [x] SCRAM
+    - [x] PLAINTEXT
+  - [x] PLAINTEXT
+- [x] Topic management
+- [ ] ACL management
+- [ ] Quota management
+- [ ] Development
+  - [ ] Local acceptance testing Kafka
+  - [ ] Automated release process
+  - [ ] Automated testing process
 
 ## Requirements
 
 - [Terraform](https://www.terraform.io/downloads.html) >= 1.0
 - [Go](https://golang.org/doc/install) >= 1.18
+
+### Optional
+
+- [direnv](https://direnv.net/)
+- [Nix](https://nixos.org/) with [Flakes](https://nixos.wiki/wiki/Flakes)
 
 ## Building The Provider
 
@@ -57,8 +66,18 @@ To generate or update documentation, run `go generate`.
 
 In order to run the full suite of Acceptance tests, run `make testacc`.
 
-*Note:* Acceptance tests create real resources, and often cost money to run.
+_Note:_ Acceptance tests create real resources, and often cost money to run.
 
 ```shell
 make testacc
 ```
+
+## FAQ
+
+> **Why not use [Mongey/terraform-provider-kafka](https://github.com/Mongey/terraform-provider-kafka)?**
+
+Mongey's provider while supporting many features is powered by [sarama](https://github.com/Shopify/sarama) which while a great library, its not as ergonomic as **kafka-go**. Additionally, I wanted to support AWS MSK, which is not currently suported by **sarama**. I initially was going to re-write Mongey's provider, but found that it would be simpler to start over with a minimal feature set.
+
+> **Does it support Zookeeper admin actions?**
+
+Not at this time. Given Kafka migration to KRaft and easy of use of the broker based admin API, I would rather focus on those for now.

@@ -1,32 +1,35 @@
 package provider
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 )
 
-func TestAccExampleDataSource(t *testing.T) {
+func TestAccTopicDataSource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			// Read testing
 			{
-				Config: testAccExampleDataSourceConfig,
+				Config: testAccTopicDataSourceConfig(existingTopic),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.kafka_topic.test", "id", "example"),
-					resource.TestCheckResourceAttr("data.kafka_topic.test", "name", "example"),
-					resource.TestCheckResourceAttr("data.kafka_topic.test", "partitions", "3"),
-					resource.TestCheckResourceAttr("data.kafka_topic.test", "replication_factor", "3"),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "id", existingTopic),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "name", existingTopic),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "partitions", "1"),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "replication_factor", "1"),
 				),
 			},
 		},
 	})
 }
 
-const testAccExampleDataSourceConfig = providerConfig + `
+func testAccTopicDataSourceConfig(name string) string {
+	return fmt.Sprintf(providerConfig+`
 data "kafka_topic" "test" {
-  name = "example"
+  name = %[1]q
 }
-`
+`, name)
+}

@@ -7,21 +7,21 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 )
 
-func TestAccExampleResource(t *testing.T) {
+func TestAccTopicResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			// Create and Read testing
 			{
-				Config: testAccExampleResourceConfig(
+				Config: testAccTopicResourceConfig(
 					"one",
-					3,
-					3,
+					1,
+					1,
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("kafka_topic.test", "configurable_attribute", "one"),
-					resource.TestCheckResourceAttr("kafka_topic.test", "id", "example-id"),
+					resource.TestCheckResourceAttr("kafka_topic.test", "name", "one"),
+					resource.TestCheckResourceAttr("kafka_topic.test", "id", "one"),
 				),
 			},
 			// ImportState testing
@@ -33,17 +33,17 @@ func TestAccExampleResource(t *testing.T) {
 				// example code does not have an actual upstream service.
 				// Once the Read method is able to refresh information from
 				// the upstream service, this can be removed.
-				ImportStateVerifyIgnore: []string{"configurable_attribute"},
+				ImportStateVerifyIgnore: []string{"configuration"},
 			},
 			// Update and Read testing
 			{
-				Config: testAccExampleResourceConfig(
+				Config: testAccTopicResourceConfig(
 					"two",
-					3,
-					3,
+					1,
+					1,
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("kafka_topic.test", "configurable_attribute", "two"),
+					resource.TestCheckResourceAttr("kafka_topic.test", "id", "two"),
 				),
 			},
 			// Delete testing automatically occurs in TestCase
@@ -51,7 +51,7 @@ func TestAccExampleResource(t *testing.T) {
 	})
 }
 
-func testAccExampleResourceConfig(name string, partitions int, replication_factor int) string {
+func testAccTopicResourceConfig(name string, partitions int, replication_factor int) string {
 	return fmt.Sprintf(providerConfig+`
 resource "kafka_topic" "test" {
   name = %[1]q

@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/modifier"
 	kafka "github.com/segmentio/kafka-go"
 	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/segmentio/topicctl/pkg/apply/assigners"
@@ -89,8 +90,13 @@ func (r *TopicResource) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagn
 				MarkdownDescription: "Configuration",
 				Type:                types.MapType{ElemType: types.StringType},
 				Optional:            true,
+				Computed:            true,
 				PlanModifiers: []tfsdk.AttributePlanModifier{
 					resource.UseStateForUnknown(),
+					modifier.DefaultAttribute(types.Map{
+						ElemType: types.StringType,
+						Elems:    map[string]attr.Value{},
+					}),
 				},
 			},
 		},
@@ -191,8 +197,7 @@ func (r *TopicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	data.Name = types.String{Value: topicInfo.Name}
 	data.Partitions = types.Int64{Value: int64(len(topicInfo.Partitions))}
 	data.ReplicationFactor = types.Int64{Value: int64(replicationFactor)}
-	// data.Version = types.Int64{Value: int64(topicInfo.Version)}
-	configElement := make(map[string]attr.Value)
+	configElement := map[string]attr.Value{}
 	for k, v := range topicInfo.Config {
 		configElement[k] = types.String{Value: v}
 	}

@@ -5,8 +5,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
-	"github.com/ory/dockertest/v3"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -35,10 +33,4 @@ var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServe
 	"kafka": providerserver.NewProtocol6WithError(New("test")()),
 }
 
-func testAccPreCheck(t *testing.T) {
-	pool, err := dockertest.NewPool("")
-	require.NoError(t, err, "could not connect to Docker")
-
-	pool.CreateNetwork("terraform-provider-kafka")
-
-}
+func testAccPreCheck(t *testing.T) {}

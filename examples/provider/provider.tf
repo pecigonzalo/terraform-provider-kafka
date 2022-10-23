@@ -1,12 +1,12 @@
 terraform {
   required_providers {
-    msk = {
-      source = "registry.terraform.io/pecigonzalo/msk"
+    kafka = {
+      source = "registry.terraform.io/pecigonzalo/kafka"
     }
   }
 }
 
-provider "msk" {
+provider "kafka" {
   bootstrap_servers = ["127.0.0.1:9092"]
   tls = {
     enabled = false

@@ -15,10 +15,10 @@ func TestAccExampleDataSource(t *testing.T) {
 			{
 				Config: testAccExampleDataSourceConfig,
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("data.msk_topic.test", "id", "example"),
-					resource.TestCheckResourceAttr("data.msk_topic.test", "name", "example"),
-					resource.TestCheckResourceAttr("data.msk_topic.test", "partitions", "3"),
-					resource.TestCheckResourceAttr("data.msk_topic.test", "replication_factor", "3"),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "id", "example"),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "name", "example"),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "partitions", "3"),
+					resource.TestCheckResourceAttr("data.kafka_topic.test", "replication_factor", "3"),
 				),
 			},
 		},
@@ -26,7 +26,7 @@ func TestAccExampleDataSource(t *testing.T) {
 }
 
 const testAccExampleDataSourceConfig = providerConfig + `
-data "msk_topic" "test" {
+data "kafka_topic" "test" {
   name = "example"
 }
 `

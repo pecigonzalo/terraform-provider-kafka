@@ -5,15 +5,17 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
+	"github.com/ory/dockertest/v3"
+	"github.com/stretchr/testify/require"
 )
 
 const (
 	// providerConfig is a shared configuration to combine with the actual
-	// test configuration so the MSK client is properly configured.
-	// It is also possible to use the MSK_ environment variables instead,
+	// test configuration so the Kafka client is properly configured.
+	// It is also possible to use the KAFKA_ environment variables instead,
 	// such as updating the Makefile and running the testing through that tool.
 	providerConfig = `
-provider "msk" {
+provider "kafka" {
   bootstrap_servers = ["127.0.0.1:9092"]
   tls = {
     enabled = false
@@ -30,11 +32,13 @@ provider "msk" {
 // CLI command executed to create a provider server to which the CLI can
 // reattach.
 var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
-	"msk": providerserver.NewProtocol6WithError(New("test")()),
+	"kafka": providerserver.NewProtocol6WithError(New("test")()),
 }
 
 func testAccPreCheck(t *testing.T) {
-	// You can add code here to run prior to any test case execution, for example assertions
-	// about the appropriate environment variables being set are common to see in a pre-check
-	// function.
+	pool, err := dockertest.NewPool("")
+	require.NoError(t, err, "could not connect to Docker")
+
+	pool.CreateNetwork("terraform-provider-kafka")
+
 }

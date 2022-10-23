@@ -20,13 +20,13 @@ func TestAccExampleResource(t *testing.T) {
 					3,
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("msk_topic.test", "configurable_attribute", "one"),
-					resource.TestCheckResourceAttr("msk_topic.test", "id", "example-id"),
+					resource.TestCheckResourceAttr("kafka_topic.test", "configurable_attribute", "one"),
+					resource.TestCheckResourceAttr("kafka_topic.test", "id", "example-id"),
 				),
 			},
 			// ImportState testing
 			{
-				ResourceName:      "msk_topic.test",
+				ResourceName:      "kafka_topic.test",
 				ImportState:       true,
 				ImportStateVerify: true,
 				// This is not normally necessary, but is here because this
@@ -43,7 +43,7 @@ func TestAccExampleResource(t *testing.T) {
 					3,
 				),
 				Check: resource.ComposeAggregateTestCheckFunc(
-					resource.TestCheckResourceAttr("msk_topic.test", "configurable_attribute", "two"),
+					resource.TestCheckResourceAttr("kafka_topic.test", "configurable_attribute", "two"),
 				),
 			},
 			// Delete testing automatically occurs in TestCase
@@ -53,7 +53,7 @@ func TestAccExampleResource(t *testing.T) {
 
 func testAccExampleResourceConfig(name string, partitions int, replication_factor int) string {
 	return fmt.Sprintf(providerConfig+`
-resource "msk_topic" "test" {
+resource "kafka_topic" "test" {
   name = %[1]q
   partitions = %v
   replication_factor = %v

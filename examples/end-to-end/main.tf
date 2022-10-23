@@ -1,12 +1,12 @@
 terraform {
   required_providers {
-    msk = {
-      source = "registry.terraform.io/pecigonzalo/msk"
+    kafka = {
+      source = "registry.terraform.io/pecigonzalo/kafka"
     }
   }
 }
 
-provider "msk" {
+provider "kafka" {
   bootstrap_servers = ["127.0.0.1:9092"]
   tls = {
     enabled = false
@@ -28,7 +28,7 @@ locals {
   }
 }
 
-resource "msk_topic" "example" {
+resource "kafka_topic" "example" {
   for_each           = local.topics
   name               = each.key
   partitions         = each.value.partitions
@@ -36,14 +36,14 @@ resource "msk_topic" "example" {
   configuration      = each.value.configuration
 }
 
-data "msk_topic" "example" {
-  name = msk_topic.example["example"].id
+data "kafka_topic" "example" {
+  name = kafka_topic.example["example"].id
 }
 
-output "msk_topic_resource" {
-  value = msk_topic.example
+output "kafka_topic_resource" {
+  value = kafka_topic.example
 }
 
-output "msk_topic_data" {
-  value = msk_topic.example
+output "kafka_topic_data" {
+  value = kafka_topic.example
 }

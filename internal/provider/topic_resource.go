@@ -49,7 +49,7 @@ func (r *TopicResource) Metadata(ctx context.Context, req resource.MetadataReque
 func (r *TopicResource) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
 	return tfsdk.Schema{
 		// This description is used by the documentation generator and the language server.
-		MarkdownDescription: "MSK Topic resource",
+		MarkdownDescription: "Kafka Topic resource",
 
 		Attributes: map[string]tfsdk.Attribute{
 			"id": {
@@ -464,30 +464,11 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 	}
 
 	currAssignments := topicInfo.ToAssignments()
-	// Don't include the topic for this applier since the picker already considers
-	// broker placement within the topic and, also, the placement might change during
-	// the apply process.
-	nonAppliedTopics := []admin.TopicInfo{}
-	topics, err := r.client.GetTopics(ctx, nil, false)
-	if err != nil {
-		return err
-	}
-	for _, topic := range topics {
-		if topic.Name != data.Name.Value {
-			nonAppliedTopics = append(
-				nonAppliedTopics,
-				topic,
-			)
-		}
-	}
-
 	for _, b := range brokersInfo {
 		tflog.Warn(ctx, b.Rack)
 	}
 
-	// picker := pickers.NewClusterUsePicker(brokersInfo, nonAppliedTopics)
 	picker := pickers.NewRandomizedPicker()
-	// picker := pickers.NewClusterUsePicker(brokersInfo, nonAppliedTopics)
 
 	extender := extenders.NewBalancedExtender(
 		brokersInfo,

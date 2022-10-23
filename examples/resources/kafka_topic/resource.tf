@@ -1,4 +1,4 @@
-resource "msk_topic" "example" {
+resource "kafka_topic" "example" {
   name               = "example"
   partitions         = 3
   replication_factor = 3

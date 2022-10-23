@@ -15,12 +15,12 @@ import (
 	"github.com/segmentio/topicctl/pkg/admin"
 )
 
-// Ensure MskProvider satisfies various provider interfaces.
-var _ provider.Provider = &MskProvider{}
-var _ provider.ProviderWithMetadata = &MskProvider{}
+// Ensure KafkaProvider satisfies various provider interfaces.
+var _ provider.Provider = &KafkaProvider{}
+var _ provider.ProviderWithMetadata = &KafkaProvider{}
 
-// MskProvider defines the provider implementation.
-type MskProvider struct {
+// KafkaProvider defines the provider implementation.
+type KafkaProvider struct {
 	typeName string
 	// version is set to the provider version on release, "dev" when the
 	// provider is built and ran locally, and "test" when running acceptance
@@ -28,8 +28,8 @@ type MskProvider struct {
 	version string
 }
 
-// MskProviderModel describes the provider data model.
-type MskProviderModel struct {
+// KafkaProviderModel describes the provider data model.
+type KafkaProviderModel struct {
 	BootstrapServers []types.String  `tfsdk:"bootstrap_servers"`
 	SASL             SASLConfigModel `tfsdk:"sasl"`
 	TLS              TLSConfigModel  `tfsdk:"tls"`
@@ -50,12 +50,12 @@ type TLSConfigModel struct {
 	SkipVerify types.Bool `tfsdk:"skip_verify"`
 }
 
-func (p *MskProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+func (p *KafkaProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = p.typeName
 	resp.Version = p.version
 }
 
-func (p *MskProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
+func (p *KafkaProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
 	return tfsdk.Schema{
 		Attributes: map[string]tfsdk.Attribute{
 			"bootstrap_servers": {
@@ -125,9 +125,9 @@ func (p *MskProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnos
 	}, nil
 }
 
-func (p *MskProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
 	// Populate config
-	var config MskProviderModel
+	var config KafkaProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -155,7 +155,7 @@ func (p *MskProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		brokerConfig,
 	)
 	if err != nil {
-		resp.Diagnostics.AddError("Unable to create MSK client",
+		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
 				"Kafka Error: "+err.Error())
 		return
@@ -168,7 +168,7 @@ func (p *MskProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		brokerConfig,
 	)
 	if err != nil {
-		resp.Diagnostics.AddError("Unable to create MSK client",
+		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
 				"Kafka Error: "+err.Error())
 		return
@@ -177,7 +177,7 @@ func (p *MskProvider) Configure(ctx context.Context, req provider.ConfigureReque
 }
 
 // generateSASLConfig returns a SASLConfig{} or an error given a SASLModel
-func (p *MskProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigModel, resp *provider.ConfigureResponse) (admin.SASLConfig, error) {
+func (p *KafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigModel, resp *provider.ConfigureResponse) (admin.SASLConfig, error) {
 	saslMechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
 	if !sasl.Mechanism.IsNull() {
 		saslMechanism = sasl.Mechanism.Value
@@ -204,13 +204,13 @@ func (p *MskProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigMod
 	return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %s", sasl.Mechanism.Value)
 }
 
-func (p *MskProvider) Resources(ctx context.Context) []func() resource.Resource {
+func (p *KafkaProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewTopicResource,
 	}
 }
 
-func (p *MskProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+func (p *KafkaProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewTopicDataSource,
 	}
@@ -218,14 +218,14 @@ func (p *MskProvider) DataSources(ctx context.Context) []func() datasource.DataS
 
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &MskProvider{
-			typeName: "msk",
+		return &KafkaProvider{
+			typeName: "kafka",
 			version:  version,
 		}
 	}
 }
 
-func (p *MskProvider) getEnv(key, fallback string) string {
+func (p *KafkaProvider) getEnv(key, fallback string) string {
 	envVarPrefix := fmt.Sprintf("%s_", strings.ToUpper(p.typeName))
 	if value, ok := os.LookupEnv(envVarPrefix + key); ok {
 		return value

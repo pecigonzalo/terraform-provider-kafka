@@ -5,7 +5,7 @@ import (
 	"flag"
 	"log"
 
-	"github.com/pecigonzalo/terraform-provider-msk/internal/provider"
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/provider"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
@@ -33,7 +33,7 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/pecigonzalo/msk",
+		Address: "registry.terraform.io/pecigonzalo/kafka",
 		Debug:   debug,
 	}
 

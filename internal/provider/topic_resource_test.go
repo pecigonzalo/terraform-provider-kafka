@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAccTopicResource(t *testing.T) {
@@ -59,4 +60,47 @@ resource "kafka_topic" "test" {
   replication_factor = %v
 }
 `, name, partitions, replication_factor)
+}
+
+func TestIncreaseReplicas(t *testing.T) {
+	assert := assert.New(t)
+	desiredCount := 3
+	currentReplicas := []int{2, 1}
+	brokerIDs := []int{1, 2, 3}
+
+	expectedReplicas := []int{2, 1, 3}
+	newReplicas := increaseReplicas(desiredCount, currentReplicas, brokerIDs)
+
+	assert.EqualValues(expectedReplicas, newReplicas, "Increase replica expected should be the same")
+}
+
+func TestReduceReplicas(t *testing.T) {
+	assert := assert.New(t)
+
+	desiredCount := 1
+	currentReplicas := []int{2, 1, 3}
+	leader := 2
+
+	expectedReplicas := []int{2}
+	newReplicas := reduceReplicas(desiredCount, currentReplicas, leader)
+
+	assert.Equal(expectedReplicas, newReplicas, "Increase replica expected should be the same")
+
+	desiredCount = 2
+	currentReplicas = []int{2, 1, 3}
+	leader = 2
+
+	expectedReplicas = []int{2, 3}
+	newReplicas = reduceReplicas(desiredCount, currentReplicas, leader)
+
+	assert.Equal(expectedReplicas, newReplicas, "Increase replica expected should be the same")
+
+	desiredCount = 2
+	currentReplicas = []int{2, 1, 3, 5, 4}
+	leader = 2
+
+	expectedReplicas = []int{2, 4}
+	newReplicas = reduceReplicas(desiredCount, currentReplicas, leader)
+
+	assert.Equal(expectedReplicas, newReplicas, "Increase replica expected should be the same")
 }

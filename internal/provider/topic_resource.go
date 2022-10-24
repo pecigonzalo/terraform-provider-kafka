@@ -3,8 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"sort"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -242,7 +240,7 @@ func (r *TopicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 
 	if !data.Config.Equal(state.Config) {
-		tflog.Debug(ctx, "Updating topic configuration")
+		tflog.Info(ctx, "Updating topic configuration")
 		err := r.updateConfig(ctx, data, req, resp)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic configuration, got error: %s", err))
@@ -250,7 +248,7 @@ func (r *TopicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		}
 	}
 	if !data.ReplicationFactor.Equal(state.ReplicationFactor) {
-		tflog.Debug(ctx, "Updating topic replication factor")
+		tflog.Info(ctx, "Updating topic replication factor")
 		err := r.updateReplicationFactor(ctx, state, data, req, resp)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic replication factor, got error: %s", err))
@@ -258,7 +256,7 @@ func (r *TopicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		}
 	}
 	if !data.Partitions.Equal(state.Partitions) {
-		tflog.Debug(ctx, "Updating topic partitions")
+		tflog.Info(ctx, "Updating topic partitions")
 		err := r.updatePartitions(ctx, state, data, req, resp)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic partitions, got error: %s", err))
@@ -358,7 +356,6 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 	replicasWanted := data.ReplicationFactor.Value
 	replicasPresent := state.ReplicationFactor.Value
 
-	// TODO: From here on, this method is quite ugly, we need to refactor it
 	var newPartitionsInfo []admin.PartitionInfo
 	for _, partition := range topicInfo.Partitions {
 		if replicasWanted > replicasPresent {
@@ -395,7 +392,6 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 	alterPartitionReassignmentsRequest := kafka.AlterPartitionReassignmentsRequest{
 		Topic:       data.Name.Value,
 		Assignments: apiAssignments,
-		Timeout:     time.Minute * 30, // TODO: Allow for configuration in the provider
 	}
 
 	tflog.Info(ctx, fmt.Sprintf("%v", alterPartitionReassignmentsRequest.Assignments))
@@ -406,6 +402,17 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 	}
 	if clientResp.Error != nil {
 		return err
+	}
+	if len(clientResp.PartitionResults) > 0 {
+		partErrors := []error{}
+		for _, partResult := range clientResp.PartitionResults {
+			if partResult.Error != nil {
+				partErrors = append(partErrors, partResult.Error)
+			}
+		}
+		if len(partErrors) > 0 {
+			return fmt.Errorf("errors changing replication factor: %s", partErrors)
+		}
 	}
 	return nil
 }
@@ -434,14 +441,15 @@ func increaseReplicas(desired int, replicas []int, brokerIDs []int) []int {
 
 func reduceReplicas(desired int, replicas []int, leader int) []int {
 	if len(replicas) > desired {
+		newReplicas := []int{}
 		for i, replica := range replicas {
 			if replica == leader {
 				continue
 			} else {
-				replicas = append(replicas[:i], replicas[i+1:]...)
+				newReplicas = append(replicas[:i], replicas[i+1:]...)
 			}
 		}
-		return reduceReplicas(desired, replicas, leader)
+		return reduceReplicas(desired, newReplicas, leader)
 	} else {
 		return replicas
 	}
@@ -451,7 +459,6 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 	if data.Partitions.Value < state.Partitions.Value {
 		return fmt.Errorf("partition count can't be reduced")
 	}
-	extraPartitions := int(data.Partitions.Value) - int(state.Partitions.Value)
 
 	brokerIDs, err := r.client.GetBrokerIDs(ctx)
 	if err != nil {
@@ -468,14 +475,14 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 
 	currAssignments := topicInfo.ToAssignments()
 	for _, b := range brokersInfo {
-		tflog.Warn(ctx, b.Rack)
+		tflog.Debug(ctx, fmt.Sprintf("Broker ID: %v Rack: %s", b.ID, b.Rack))
 	}
+	extraPartitions := int(data.Partitions.Value) - int(state.Partitions.Value)
 
 	picker := pickers.NewRandomizedPicker()
-
 	extender := extenders.NewBalancedExtender(
 		brokersInfo,
-		true,
+		false,
 		picker,
 	)
 	desiredAssignments, err := extender.Extend(
@@ -486,11 +493,15 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 	if err != nil {
 		return err
 	}
+	desiredAssignments = desiredAssignments[len(desiredAssignments)-extraPartitions:]
 
-	err = r.client.AssignPartitions(ctx, data.Name.Value, desiredAssignments)
+	tflog.Info(ctx, fmt.Sprintf("Assignments: %v", desiredAssignments))
+
+	err = r.client.AddPartitions(ctx, data.Name.Value, desiredAssignments)
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 

@@ -7,7 +7,6 @@ services:
       - "2181"
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
-      - ZOO_HEAP_SIZE=512
     volumes:
       - zookeeper_data:/bitnami/zookeeper
   kafka-0:
@@ -16,6 +15,7 @@ services:
       - "9092:9092"
     environment:
       - KAFKA_CFG_BROKER_ID=0
+      - KAFKA_CFG_BROKER_RACK=AZ0
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
       - ALLOW_PLAINTEXT_LISTENER=yes
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
@@ -33,6 +33,7 @@ services:
       - "9093:9093"
     environment:
       - KAFKA_CFG_BROKER_ID=1
+      - KAFKA_CFG_BROKER_RACK=AZ1
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
       - ALLOW_PLAINTEXT_LISTENER=yes
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
@@ -50,6 +51,7 @@ services:
       - "9094:9094"
     environment:
       - KAFKA_CFG_BROKER_ID=2
+      - KAFKA_CFG_BROKER_RACK=AZ2
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
       - ALLOW_PLAINTEXT_LISTENER=yes
       - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT

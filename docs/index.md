@@ -42,7 +42,7 @@ provider "kafka" {
 ### Optional
 
 - `sasl` (Attributes) SASL Authentication (see [below for nested schema](#nestedatt--sasl))
-- `timeout` (Number) Timeout for provider operations (default: 300)
+- `timeout` (Number) Timeout for provider operations in seconds (default: 300)
 - `tls` (Attributes) TLS Configuration (see [below for nested schema](#nestedatt--tls))
 
 <a id="nestedatt--sasl"></a>

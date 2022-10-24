@@ -364,12 +364,10 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		if replicasWanted > replicasPresent {
 			// Add replicas
 			partition.Replicas = increaseReplicas(int(replicasWanted), partition.Replicas, brokerIDs)
-			sort.Ints(partition.Replicas)
 			newPartitionsInfo = append(newPartitionsInfo, partition)
 		} else if replicasWanted < replicasPresent {
 			// Removing replicas
 			partition.Replicas = reduceReplicas(int(replicasWanted), partition.Replicas, partition.Leader)
-			sort.Ints(partition.Replicas)
 			newPartitionsInfo = append(newPartitionsInfo, partition)
 		} else {
 			return fmt.Errorf("unable to identify replica factor change type")

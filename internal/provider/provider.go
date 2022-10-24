@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -116,7 +117,7 @@ func (p *KafkaProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagn
 				}),
 			},
 			"timeout": {
-				MarkdownDescription: "Timeout for provider operations (default: 300)",
+				MarkdownDescription: "Timeout for provider operations in seconds (default: 300)",
 				Optional:            true,
 				Computed:            true,
 				Type:                types.Int64Type,
@@ -149,11 +150,14 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		brokerConfig.SASL = saslConfig
 	}
 
+	dafaultTimeout := time.Second * time.Duration(config.Timeout.Value)
+
 	brokerConfig.ReadOnly = true
 	dataSourceClient, err := admin.NewBrokerAdminClient(
 		ctx,
 		brokerConfig,
 	)
+	dataSourceClient.GetConnector().KafkaClient.Timeout = time.Duration(dafaultTimeout)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
@@ -167,6 +171,7 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		ctx,
 		brokerConfig,
 	)
+	resourceClient.GetConnector().KafkaClient.Timeout = time.Duration(dafaultTimeout)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+

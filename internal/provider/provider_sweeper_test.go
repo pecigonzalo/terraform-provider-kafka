@@ -16,6 +16,11 @@ const (
 
 // Configure mock Kafka cluster and teardown
 func TestMain(t *testing.M) {
+	// Skip docker setup if not running acceptance
+	if os.Getenv("TF_ACC") == "" {
+		code := t.Run()
+		os.Exit(code)
+	}
 	pool, err := dockertest.NewPool("")
 	if err != nil {
 		log.Fatalf("Could not connect to docker: %s", err)

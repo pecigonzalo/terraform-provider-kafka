@@ -24,6 +24,8 @@
                 gnumake
                 terraform
                 topicctl
+                kcat
+                apacheKafka
               ];
           };
       });

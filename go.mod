@@ -10,7 +10,7 @@ require (
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.24.0
 	github.com/ory/dockertest/v3 v3.9.1
 	github.com/segmentio/kafka-go v0.4.35
-	github.com/stretchr/testify v1.8.0
+	github.com/stretchr/testify v1.8.1
 )
 
 require (

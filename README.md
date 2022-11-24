@@ -3,7 +3,7 @@
 A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmentio/kafka-go).
 
 ## State
-
+- [ ] Migrate to use `kafka-go` directly instead of `topicctl` wrappers
 - [x] Authentication
   - [x] SASL
     - [x] IAM
@@ -13,10 +13,10 @@ A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmenti
 - [x] Topic management
 - [ ] ACL management
 - [ ] Quota management
-- [ ] Development
-  - [ ] Local acceptance testing Kafka
-  - [ ] Automated release process
-  - [ ] Automated testing process
+- [x] Development
+  - [x] Local acceptance testing Kafka
+  - [x] Automated release process
+  - [x] Automated testing process
 
 ## Requirements
 

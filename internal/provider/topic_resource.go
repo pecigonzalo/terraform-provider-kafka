@@ -91,10 +91,10 @@ func (r *TopicResource) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagn
 				Computed:            true,
 				PlanModifiers: []tfsdk.AttributePlanModifier{
 					resource.UseStateForUnknown(),
-					modifier.DefaultAttribute(types.Map{
-						ElemType: types.StringType,
-						Elems:    map[string]attr.Value{},
-					}),
+					modifier.DefaultAttribute(types.MapValueMust(
+						types.StringType,
+						map[string]attr.Value{},
+					)),
 				},
 			},
 		},
@@ -133,7 +133,7 @@ func (r *TopicResource) Create(ctx context.Context, req resource.CreateRequest, 
 
 	// Generate KafkaConfig
 	var configEntries []kafka.ConfigEntry
-	for k, v := range data.Config.Elems {
+	for k, v := range data.Config.Elements() {
 		configEntries = append(configEntries, kafka.ConfigEntry{
 			ConfigName: k,
 			// TODO: Why do we have to do this ugly remove quotes?
@@ -142,13 +142,13 @@ func (r *TopicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		})
 	}
 	topicConfig := kafka.TopicConfig{
-		Topic:             data.Name.Value,
-		NumPartitions:     int(data.Partitions.Value),
-		ReplicationFactor: int(data.ReplicationFactor.Value),
+		Topic:             data.Name.ValueString(),
+		NumPartitions:     int(data.Partitions.ValueInt64()),
+		ReplicationFactor: int(data.ReplicationFactor.ValueInt64()),
 		ConfigEntries:     configEntries,
 	}
 
-	tflog.Info(ctx, fmt.Sprintf("Creating topic %s", data.Name.Value))
+	tflog.Info(ctx, fmt.Sprintf("Creating topic %s", data.Name.ValueString()))
 	createRequest := kafka.CreateTopicsRequest{
 		Topics: []kafka.TopicConfig{topicConfig},
 	}
@@ -180,7 +180,7 @@ func (r *TopicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	topicInfo, err := r.client.GetTopic(ctx, data.ID.Value, true)
+	topicInfo, err := r.client.GetTopic(ctx, data.ID.ValueString(), true)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
 		return
@@ -192,17 +192,17 @@ func (r *TopicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	data.Name = types.String{Value: topicInfo.Name}
-	data.Partitions = types.Int64{Value: int64(len(topicInfo.Partitions))}
-	data.ReplicationFactor = types.Int64{Value: int64(replicationFactor)}
+	data.Name = types.StringValue(topicInfo.Name)
+	data.Partitions = types.Int64Value(int64(len(topicInfo.Partitions)))
+	data.ReplicationFactor = types.Int64Value(int64(replicationFactor))
 	configElement := map[string]attr.Value{}
 	for k, v := range topicInfo.Config {
-		configElement[k] = types.String{Value: v}
+		configElement[k] = types.StringValue(v)
 	}
-	data.Config = types.Map{
-		ElemType: types.StringType,
-		Elems:    configElement,
-	}
+	data.Config = types.MapValueMust(
+		types.StringType,
+		configElement,
+	)
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
@@ -271,7 +271,7 @@ func (r *TopicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 func (r *TopicResource) updateConfig(ctx context.Context, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
 	// Generate KafkaConfig
 	var configEntries []kafka.ConfigEntry
-	for k, v := range data.Config.Elems {
+	for k, v := range data.Config.Elements() {
 		configEntries = append(configEntries, kafka.ConfigEntry{
 			ConfigName: k,
 			// TODO: Why do we have to do this ugly remove quotes?
@@ -284,7 +284,7 @@ func (r *TopicResource) updateConfig(ctx context.Context, data *TopicResourceMod
 		Resources: []kafka.AlterConfigRequestResource{
 			{
 				ResourceType: kafka.ResourceTypeTopic,
-				ResourceName: data.Name.Value,
+				ResourceName: data.Name.ValueString(),
 				Configs:      configEntriesToAlterConfigs(configEntries),
 			},
 		},
@@ -323,11 +323,11 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		return err
 	}
 
-	if data.ReplicationFactor.Value > int64(len(brokerIDs)) {
+	if data.ReplicationFactor.ValueInt64() > int64(len(brokerIDs)) {
 		return fmt.Errorf("replication factor cannot be higher than the number of brokers")
 	}
 
-	topicInfo, err := r.client.GetTopic(ctx, data.Name.Value, false)
+	topicInfo, err := r.client.GetTopic(ctx, data.Name.ValueString(), false)
 	if err != nil {
 		return err
 	}
@@ -345,7 +345,7 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		return err
 	}
 	for _, topic := range topics {
-		if topic.Name != data.Name.Value {
+		if topic.Name != data.Name.ValueString() {
 			nonAppliedTopics = append(
 				nonAppliedTopics,
 				topic,
@@ -353,8 +353,8 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		}
 	}
 
-	replicasWanted := data.ReplicationFactor.Value
-	replicasPresent := state.ReplicationFactor.Value
+	replicasWanted := data.ReplicationFactor.ValueInt64()
+	replicasPresent := state.ReplicationFactor.ValueInt64()
 
 	var newPartitionsInfo []admin.PartitionInfo
 	for _, partition := range topicInfo.Partitions {
@@ -376,7 +376,7 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 	picker := pickers.NewClusterUsePicker(brokersInfo, nonAppliedTopics)
 	assigner := assigners.NewCrossRackAssigner(brokersInfo, picker)
 
-	assignments, err := assigner.Assign(data.Name.Value, newAssignments)
+	assignments, err := assigner.Assign(data.Name.ValueString(), newAssignments)
 	if err != nil {
 		return err
 	}
@@ -390,7 +390,7 @@ func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		apiAssignments = append(apiAssignments, apiAssignment)
 	}
 	alterPartitionReassignmentsRequest := kafka.AlterPartitionReassignmentsRequest{
-		Topic:       data.Name.Value,
+		Topic:       data.Name.ValueString(),
 		Assignments: apiAssignments,
 	}
 
@@ -456,7 +456,7 @@ func reduceReplicas(desired int, replicas []int, leader int) []int {
 }
 
 func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
-	if data.Partitions.Value < state.Partitions.Value {
+	if data.Partitions.ValueInt64() < state.Partitions.ValueInt64() {
 		return fmt.Errorf("partition count can't be reduced")
 	}
 
@@ -468,7 +468,7 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 	if err != nil {
 		return err
 	}
-	topicInfo, err := r.client.GetTopic(ctx, data.Name.Value, false)
+	topicInfo, err := r.client.GetTopic(ctx, data.Name.ValueString(), false)
 	if err != nil {
 		return err
 	}
@@ -477,7 +477,7 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 	for _, b := range brokersInfo {
 		tflog.Debug(ctx, fmt.Sprintf("Broker ID: %v Rack: %s", b.ID, b.Rack))
 	}
-	extraPartitions := int(data.Partitions.Value) - int(state.Partitions.Value)
+	extraPartitions := int(data.Partitions.ValueInt64()) - int(state.Partitions.ValueInt64())
 
 	picker := pickers.NewRandomizedPicker()
 	extender := extenders.NewBalancedExtender(
@@ -486,7 +486,7 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 		picker,
 	)
 	desiredAssignments, err := extender.Extend(
-		data.Name.Value,
+		data.Name.ValueString(),
 		currAssignments,
 		extraPartitions,
 	)
@@ -497,7 +497,7 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 
 	tflog.Info(ctx, fmt.Sprintf("Assignments: %v", desiredAssignments))
 
-	err = r.client.AddPartitions(ctx, data.Name.Value, desiredAssignments)
+	err = r.client.AddPartitions(ctx, data.Name.ValueString(), desiredAssignments)
 	if err != nil {
 		return err
 	}
@@ -516,7 +516,7 @@ func (r *TopicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	}
 
 	clientResp, err := r.client.GetConnector().KafkaClient.DeleteTopics(ctx, &kafka.DeleteTopicsRequest{
-		Topics: []string{data.Name.Value},
+		Topics: []string{data.Name.ValueString()},
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))

@@ -176,7 +176,7 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	boostrapServers := strings.Split(bootstrapServersString, ",")
 	boostrapServer := boostrapServers[0] // Select the first server on the list
 	if len(config.BootstrapServers) > 0 {
-		boostrapServer = config.BootstrapServers[0].Value
+		boostrapServer = config.BootstrapServers[0].ValueString()
 	}
 	// We only require 1 server
 	brokerConfig.BrokerAddr = boostrapServer
@@ -185,7 +185,7 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	// SASL configuration
 	saslConfigEnabled := p.getEnvBool("SASL_ENABLED", true)
 	if !config.SASL.Enabled.IsNull() {
-		saslConfigEnabled = config.SASL.Enabled.Value
+		saslConfigEnabled = config.SASL.Enabled.ValueBool()
 	}
 	if saslConfigEnabled {
 		saslConfig, err := p.generateSASLConfig(ctx, config.SASL, resp)
@@ -197,13 +197,13 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 
 	// Configure TLS settings
-	brokerConfig.TLS.Enabled = config.TLS.Enabled.Value
-	brokerConfig.TLS.SkipVerify = config.TLS.SkipVerify.Value
+	brokerConfig.TLS.Enabled = config.TLS.Enabled.ValueBool()
+	brokerConfig.TLS.SkipVerify = config.TLS.SkipVerify.ValueBool()
 
 	// Configure timeout
 	defaultTimeout := int64(p.getEnvInt("TIMEOUT", 300))
 	if !config.Timeout.IsNull() {
-		defaultTimeout = config.Timeout.Value
+		defaultTimeout = config.Timeout.ValueInt64()
 	}
 	kafkaClientTimeout := time.Second * time.Duration(defaultTimeout)
 
@@ -243,15 +243,15 @@ func (p *KafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigM
 
 	saslMechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
 	if !sasl.Mechanism.IsNull() {
-		saslMechanism = sasl.Mechanism.Value
+		saslMechanism = sasl.Mechanism.ValueString()
 	}
 	saslUsername := p.getEnv("SASL_USERNAME", "")
 	if !sasl.Mechanism.IsNull() {
-		saslUsername = sasl.Username.Value
+		saslUsername = sasl.Username.ValueString()
 	}
 	saslPassword := p.getEnv("SASL_PASSWORD", "")
 	if !sasl.Mechanism.IsNull() {
-		saslPassword = sasl.Password.Value
+		saslPassword = sasl.Password.ValueString()
 	}
 
 	switch admin.SASLMechanism(saslMechanism) {
@@ -273,7 +273,7 @@ func (p *KafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigM
 			Mechanism: admin.SASLMechanismAWSMSKIAM,
 		}, nil
 	}
-	return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %s", sasl.Mechanism.Value)
+	return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %s", sasl.Mechanism.ValueString())
 }
 
 func (p *KafkaProvider) Resources(ctx context.Context) []func() resource.Resource {

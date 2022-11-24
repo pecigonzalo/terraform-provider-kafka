@@ -107,7 +107,7 @@ func (d *TopicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
-	topicInfo, err := d.client.GetTopic(ctx, data.Name.Value, true)
+	topicInfo, err := d.client.GetTopic(ctx, data.Name.ValueString(), true)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
 		return
@@ -119,20 +119,20 @@ func (d *TopicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
-	data.ID = types.String{Value: topicInfo.Name}
-	data.Name = types.String{Value: topicInfo.Name}
-	data.Partitions = types.Int64{Value: int64(len(topicInfo.Partitions))}
-	data.ReplicationFactor = types.Int64{Value: int64(replicationFactor)}
-	data.Version = types.Int64{Value: int64(topicInfo.Version)}
+	data.ID = types.StringValue(topicInfo.Name)
+	data.Name = types.StringValue(topicInfo.Name)
+	data.Partitions = types.Int64Value(int64(len(topicInfo.Partitions)))
+	data.ReplicationFactor = types.Int64Value(int64(replicationFactor))
+	data.Version = types.Int64Value(int64(topicInfo.Version))
 
 	configElement := make(map[string]attr.Value)
 	for k, v := range topicInfo.Config {
-		configElement[k] = types.String{Value: v}
+		configElement[k] = types.StringValue(v)
 	}
-	data.Config = types.Map{
-		ElemType: types.StringType,
-		Elems:    configElement,
-	}
+	data.Config = types.MapValueMust(
+		types.StringType,
+		configElement,
+	)
 
 	// Write logs using the tflog package
 	// Documentation: https://terraform.io/plugin/log

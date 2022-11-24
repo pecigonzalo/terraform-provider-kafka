@@ -213,13 +213,13 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		ctx,
 		brokerConfig,
 	)
-	dataSourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
 				"Kafka Error: "+err.Error())
 		return
 	}
+	dataSourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
 	resp.DataSourceData = dataSourceClient
 
 	brokerConfig.ReadOnly = false
@@ -227,13 +227,13 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		ctx,
 		brokerConfig,
 	)
-	resourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
 				"Kafka Error: "+err.Error())
 		return
 	}
+	resourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
 	resp.ResourceData = resourceClient
 	tflog.Info(ctx, "Configured Kafka client", map[string]any{"success": true})
 }

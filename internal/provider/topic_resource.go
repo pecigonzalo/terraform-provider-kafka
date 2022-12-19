@@ -5,13 +5,15 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/pecigonzalo/terraform-provider-kafka/internal/modifier"
 	kafka "github.com/segmentio/kafka-go"
 	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/segmentio/topicctl/pkg/apply/assigners"
@@ -20,15 +22,18 @@ import (
 )
 
 // Ensure provider defined types fully satisfy framework interfaces
-var _ resource.Resource = &TopicResource{}
-var _ resource.ResourceWithImportState = &TopicResource{}
+var (
+	_ resource.Resource                = &topicResource{}
+	_ resource.ResourceWithConfigure   = &topicResource{}
+	_ resource.ResourceWithImportState = &topicResource{}
+)
 
 func NewTopicResource() resource.Resource {
-	return &TopicResource{}
+	return &topicResource{}
 }
 
-// TopicResource defines the resource implementation.
-type TopicResource struct {
+// topicResource defines the resource implementation.
+type topicResource struct {
 	client *admin.BrokerAdminClient
 }
 
@@ -41,67 +46,59 @@ type TopicResourceModel struct {
 	Config            types.Map    `tfsdk:"configuration"`
 }
 
-func (r *TopicResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+func (r *topicResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_topic"
 }
 
-func (r *TopicResource) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
-	return tfsdk.Schema{
+func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+	resp.Schema = schema.Schema{
 		// This description is used by the documentation generator and the language server.
 		MarkdownDescription: "Kafka Topic resource",
 
-		Attributes: map[string]tfsdk.Attribute{
-			"id": {
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
 				MarkdownDescription: "Topic id",
-				Type:                types.StringType,
 				Computed:            true,
-				PlanModifiers: []tfsdk.AttributePlanModifier{
-					resource.UseStateForUnknown(),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"name": {
+			"name": schema.StringAttribute{
 				MarkdownDescription: "Topic name",
-				Type:                types.StringType,
 				Required:            true,
-				PlanModifiers: []tfsdk.AttributePlanModifier{
-					resource.RequiresReplace(),
-					resource.UseStateForUnknown(),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
-			"partitions": {
+			"partitions": schema.Int64Attribute{
 				MarkdownDescription: "Topic partitions count",
-				Type:                types.Int64Type,
 				Required:            true,
-				PlanModifiers: []tfsdk.AttributePlanModifier{
-					resource.UseStateForUnknown(),
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
 				},
 			},
-			"replication_factor": {
+			"replication_factor": schema.Int64Attribute{
 				MarkdownDescription: "Topic replication factor count",
-				Type:                types.Int64Type,
 				Required:            true,
-				PlanModifiers: []tfsdk.AttributePlanModifier{
-					resource.UseStateForUnknown(),
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
 				},
 			},
-			"configuration": {
+			"configuration": schema.MapAttribute{
 				MarkdownDescription: "Configuration",
-				Type:                types.MapType{ElemType: types.StringType},
+				ElementType:         types.StringType,
 				Optional:            true,
 				Computed:            true,
-				PlanModifiers: []tfsdk.AttributePlanModifier{
-					resource.UseStateForUnknown(),
-					modifier.DefaultAttribute(types.MapValueMust(
-						types.StringType,
-						map[string]attr.Value{},
-					)),
+				PlanModifiers: []planmodifier.Map{
+					mapplanmodifier.UseStateForUnknown(),
 				},
 			},
 		},
-	}, nil
+	}
 }
 
-func (r *TopicResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *topicResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	// Prevent panic if the provider has not been configured.
 	if req.ProviderData == nil {
 		return
@@ -121,7 +118,7 @@ func (r *TopicResource) Configure(ctx context.Context, req resource.ConfigureReq
 	r.client = client
 }
 
-func (r *TopicResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data *TopicResourceModel
 
 	// Read Terraform plan data into the model
@@ -171,7 +168,7 @@ func (r *TopicResource) Create(ctx context.Context, req resource.CreateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func (r *TopicResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var data *TopicResourceModel
 
 	// Read Terraform prior state data into the model
@@ -227,7 +224,7 @@ func replicaCount(topicInfo admin.TopicInfo) (int, error) {
 	return count, nil
 }
 
-func (r *TopicResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	// Read Terraform plan data into the model
 	var data *TopicResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
@@ -268,7 +265,7 @@ func (r *TopicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func (r *TopicResource) updateConfig(ctx context.Context, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
+func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
 	// Generate KafkaConfig
 	var configEntries []kafka.ConfigEntry
 	for k, v := range data.Config.Elements() {
@@ -317,7 +314,7 @@ func configEntriesToAlterConfigs(
 	return apiConfigs
 }
 
-func (r *TopicResource) updateReplicationFactor(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
+func (r *topicResource) updateReplicationFactor(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
 	brokerIDs, err := r.client.GetBrokerIDs(ctx)
 	if err != nil {
 		return err
@@ -455,7 +452,7 @@ func reduceReplicas(desired int, replicas []int, leader int) []int {
 	}
 }
 
-func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
+func (r *topicResource) updatePartitions(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
 	if data.Partitions.ValueInt64() < state.Partitions.ValueInt64() {
 		return fmt.Errorf("partition count can't be reduced")
 	}
@@ -505,7 +502,7 @@ func (r *TopicResource) updatePartitions(ctx context.Context, state *TopicResour
 	return nil
 }
 
-func (r *TopicResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data *TopicResourceModel
 
 	// Read Terraform prior state data into the model
@@ -531,6 +528,6 @@ func (r *TopicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	}
 }
 
-func (r *TopicResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *topicResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }

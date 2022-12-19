@@ -6,27 +6,26 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/segmentio/topicctl/pkg/admin"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces
-var _ datasource.DataSource = &TopicDataSource{}
+var _ datasource.DataSource = &topicDataSource{}
 
 func NewTopicDataSource() datasource.DataSource {
-	return &TopicDataSource{}
+	return &topicDataSource{}
 }
 
-// TopicDataSource defines the data source implementation.
-type TopicDataSource struct {
+// topicDataSource defines the data source implementation.
+type topicDataSource struct {
 	client *admin.BrokerAdminClient
 }
 
 // TopicDataSourceModel describes the data source data model.
-type TopicDataSourceModel struct {
+type topicDataSourceModel struct {
 	ID                types.String `tfsdk:"id"`
 	Name              types.String `tfsdk:"name"`
 	Partitions        types.Int64  `tfsdk:"partitions"`
@@ -35,49 +34,44 @@ type TopicDataSourceModel struct {
 	Config            types.Map    `tfsdk:"configuration"`
 }
 
-func (d *TopicDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
+func (d *topicDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_topic"
 }
 
-func (d *TopicDataSource) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
-	return tfsdk.Schema{
+func (d *topicDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
+	resp.Schema = schema.Schema{
 		MarkdownDescription: "Topic data source",
 
-		Attributes: map[string]tfsdk.Attribute{
-			"id": {
-				Type:     types.StringType,
+		Attributes: map[string]schema.Attribute{
+			"id": schema.StringAttribute{
 				Computed: true,
 			},
-			"name": {
+			"name": schema.StringAttribute{
 				MarkdownDescription: "Topic name",
-				Type:                types.StringType,
 				Required:            true,
 			},
-			"partitions": {
+			"partitions": schema.Int64Attribute{
 				MarkdownDescription: "Topic partitions count",
-				Type:                types.Int64Type,
 				Computed:            true,
 			},
-			"replication_factor": {
+			"replication_factor": schema.Int64Attribute{
 				MarkdownDescription: "Topic replication factor",
-				Type:                types.Int64Type,
 				Computed:            true,
 			},
-			"version": {
+			"version": schema.Int64Attribute{
 				MarkdownDescription: "Topic version",
-				Type:                types.Int64Type,
 				Computed:            true,
 			},
-			"configuration": {
+			"configuration": schema.MapAttribute{
 				MarkdownDescription: "Configuration version",
-				Type:                types.MapType{ElemType: types.StringType},
+				ElementType:         types.StringType,
 				Computed:            true,
 			},
 		},
-	}, nil
+	}
 }
 
-func (d *TopicDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
+func (d *topicDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
 	// Prevent panic if the provider has not been configured.
 	if req.ProviderData == nil {
 		return
@@ -97,8 +91,8 @@ func (d *TopicDataSource) Configure(ctx context.Context, req datasource.Configur
 	d.client = client
 }
 
-func (d *TopicDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
-	var data TopicDataSourceModel
+func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
+	var data topicDataSourceModel
 
 	// Read Terraform configuration data into the model
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)

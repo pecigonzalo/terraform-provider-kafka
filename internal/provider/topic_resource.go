@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/modifier"
 	kafka "github.com/segmentio/kafka-go"
 	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/segmentio/topicctl/pkg/apply/assigners"
@@ -92,6 +93,10 @@ func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Computed:            true,
 				PlanModifiers: []planmodifier.Map{
 					mapplanmodifier.UseStateForUnknown(),
+					modifier.MapDefaultValue(types.MapValueMust(
+						types.StringType,
+						map[string]attr.Value{},
+					)),
 				},
 			},
 		},

@@ -9,22 +9,20 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
+	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
-	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/segmentio/topicctl/pkg/admin"
 )
 
 // Ensure KafkaProvider satisfies various provider interfaces.
-var _ provider.Provider = &KafkaProvider{}
-var _ provider.ProviderWithMetadata = &KafkaProvider{}
+var _ provider.Provider = &kafkaProvider{}
 
-// KafkaProvider defines the provider implementation.
-type KafkaProvider struct {
+// kafkaProvider defines the provider implementation.
+type kafkaProvider struct {
 	typeName string
 	// version is set to the provider version on release, "dev" when the
 	// provider is built and ran locally, and "test" when running acceptance
@@ -32,8 +30,8 @@ type KafkaProvider struct {
 	version string
 }
 
-// KafkaProviderModel describes the provider data model.
-type KafkaProviderModel struct {
+// kafkaProviderModel describes the provider data model.
+type kafkaProviderModel struct {
 	BootstrapServers []types.String  `tfsdk:"bootstrap_servers"`
 	SASL             SASLConfigModel `tfsdk:"sasl"`
 	TLS              TLSConfigModel  `tfsdk:"tls"`
@@ -54,84 +52,68 @@ type TLSConfigModel struct {
 	SkipVerify types.Bool `tfsdk:"skip_verify"`
 }
 
-func (p *KafkaProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+func (p *kafkaProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = p.typeName
 	resp.Version = p.version
 }
 
-func (p *KafkaProvider) GetSchema(ctx context.Context) (tfsdk.Schema, diag.Diagnostics) {
-	return tfsdk.Schema{
-		Attributes: map[string]tfsdk.Attribute{
-			"bootstrap_servers": {
+func (p *kafkaProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
+	resp.Schema = schema.Schema{
+		Attributes: map[string]schema.Attribute{
+			"bootstrap_servers": schema.ListAttribute{
 				MarkdownDescription: "A list of Kafka brokers",
 				Required:            true,
-				Type: types.ListType{
-					ElemType: types.StringType,
-				},
+				ElementType:         types.StringType,
 			},
-			"tls": {
+			"tls": schema.SingleNestedAttribute{
 				MarkdownDescription: "TLS Configuration",
 				Optional:            true,
-				Computed:            true,
-				Attributes: tfsdk.SingleNestedAttributes(map[string]tfsdk.Attribute{
-					"enabled": {
+				Attributes: map[string]schema.Attribute{
+					"enabled": schema.BoolAttribute{
 						MarkdownDescription: "Enable TLS communication with Kafka brokers (default: true)",
 						Optional:            true,
-						Computed:            true,
-						Type:                types.BoolType,
 					},
-					"skip_verify": {
+					"skip_verify": schema.BoolAttribute{
 						MarkdownDescription: "Skips TLS verification when connecting to the brokers (default: false)",
 						Optional:            true,
-						Computed:            true,
-						Type:                types.BoolType,
 					},
-				}),
+				},
 			},
-			"sasl": {
+			"sasl": schema.SingleNestedAttribute{
 				MarkdownDescription: "SASL Authentication",
 				Optional:            true,
-				Computed:            true,
-				Attributes: tfsdk.SingleNestedAttributes(map[string]tfsdk.Attribute{
-					"enabled": {
+				Attributes: map[string]schema.Attribute{
+					"enabled": schema.BoolAttribute{
 						MarkdownDescription: "Enable SASL Authentication",
 						Optional:            true,
-						Computed:            true,
-						Type:                types.BoolType,
 					},
-					"mechanism": {
+					"mechanism": schema.StringAttribute{
 						MarkdownDescription: "SASL mechanism to use. One of plain, scram-sha512, scram-sha256, aws-msk-iam (default: aws-msk-iam)",
 						Optional:            true,
-						Computed:            true,
-						Type:                types.StringType,
 					},
-					"username": {
+					"username": schema.StringAttribute{
 						MarkdownDescription: "Username for SASL authentication",
 						Optional:            true,
-						Type:                types.StringType,
 						Sensitive:           true,
 					},
-					"password": {
+					"password": schema.StringAttribute{
 						MarkdownDescription: "Password for SASL authentication",
 						Optional:            true,
-						Type:                types.StringType,
 						Sensitive:           true,
 					},
-				}),
+				},
 			},
-			"timeout": {
+			"timeout": schema.Int64Attribute{
 				MarkdownDescription: "Timeout for provider operations in seconds (default: 300)",
 				Optional:            true,
-				Computed:            true,
-				Type:                types.Int64Type,
 			},
 		},
-	}, nil
+	}
 }
 
-func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
 	// Populate config
-	var config KafkaProviderModel
+	var config kafkaProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -239,7 +221,7 @@ func (p *KafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 }
 
 // generateSASLConfig returns a SASLConfig{} or an error given a SASLModel
-func (p *KafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigModel, resp *provider.ConfigureResponse) (admin.SASLConfig, error) {
+func (p *kafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigModel, resp *provider.ConfigureResponse) (admin.SASLConfig, error) {
 
 	saslMechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
 	if !sasl.Mechanism.IsNull() {
@@ -276,13 +258,13 @@ func (p *KafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigM
 	return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %s", sasl.Mechanism.ValueString())
 }
 
-func (p *KafkaProvider) Resources(ctx context.Context) []func() resource.Resource {
+func (p *kafkaProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewTopicResource,
 	}
 }
 
-func (p *KafkaProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+func (p *kafkaProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewTopicDataSource,
 	}
@@ -290,14 +272,14 @@ func (p *KafkaProvider) DataSources(ctx context.Context) []func() datasource.Dat
 
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &KafkaProvider{
+		return &kafkaProvider{
 			typeName: "kafka",
 			version:  version,
 		}
 	}
 }
 
-func (p *KafkaProvider) getEnv(key, fallback string) string {
+func (p *kafkaProvider) getEnv(key, fallback string) string {
 	envVarPrefix := fmt.Sprintf("%s_", strings.ToUpper(p.typeName))
 	if value, ok := os.LookupEnv(envVarPrefix + key); ok {
 		return value
@@ -305,7 +287,7 @@ func (p *KafkaProvider) getEnv(key, fallback string) string {
 	return fallback
 }
 
-func (p *KafkaProvider) getEnvInt(key string, fallback int) int {
+func (p *kafkaProvider) getEnvInt(key string, fallback int) int {
 	envVar := p.getEnv(key, "")
 	if envVar == "" {
 		return fallback
@@ -318,7 +300,7 @@ func (p *KafkaProvider) getEnvInt(key string, fallback int) int {
 	return result
 }
 
-func (p *KafkaProvider) getEnvBool(key string, fallback bool) bool {
+func (p *kafkaProvider) getEnvBool(key string, fallback bool) bool {
 	envVar := p.getEnv(key, "")
 	if envVar == "" {
 		return fallback

@@ -184,8 +184,15 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 
 	topicInfo, err := r.client.GetTopic(ctx, data.ID.ValueString(), true)
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
-		return
+		switch err {
+		case admin.ErrTopicDoesNotExist:
+			// If the Topic does not exist, we remove it and return
+			resp.State.RemoveResource(ctx)
+			return
+		default:
+			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
+			return
+		}
 	}
 
 	replicationFactor, err := replicaCount(topicInfo)

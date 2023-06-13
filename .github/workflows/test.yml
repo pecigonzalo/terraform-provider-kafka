@@ -34,8 +34,6 @@ jobs:
 
   generate:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v4
@@ -47,10 +45,6 @@ jobs:
         run: |
           git diff --compact-summary --exit-code || \
             (echo; echo "Unexpected difference in directories after code generation. Run 'go generate ./...' command and commit."; exit 1)
-      - uses: reviewdog/action-suggester@v1
-        if: ${{ failure() && github.event_name == 'pull_request' }}
-        with:
-          tool_name: go-generate
 
   # Run acceptance tests in a matrix with Terraform CLI versions
   test:

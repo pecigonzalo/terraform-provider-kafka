@@ -31,27 +31,13 @@ func TestMain(t *testing.M) {
 		log.Fatalf("Could not start network: %s", err)
 	}
 
-	zkContainer, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository:   "docker.io/bitnami/zookeeper",
-		Tag:          "3.8",
-		Env:          []string{"ALLOW_ANONYMOUS_LOGIN=yes"},
-		Hostname:     "zookeeper",
-		NetworkID:    network.Network.ID,
-		ExposedPorts: []string{"2181"},
-	})
-	if err != nil {
-		log.Fatalf("Could not start resource: %s", err)
-	}
-
 	kafkaContainer, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: "docker.io/bitnami/kafka",
 		Tag:        "3.3",
 		Env: []string{
-			"KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181",
-			"KAFKA_CFG_BROKER_ID=0",
+			"BITNAMI_DEBUG=true",
 			"ALLOW_PLAINTEXT_LISTENER=yes",
-			"KAFKA_CFG_LISTENERS=PLAINTEXT://:9092",
-			"KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://127.0.0.1:9092",
+			"KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092",
 		},
 		Hostname:  "kafka-1",
 		NetworkID: network.Network.ID,
@@ -66,6 +52,10 @@ func TestMain(t *testing.M) {
 	waitForKafka := func() error {
 		conn, err := kafka.Dial("tcp", "localhost:9092")
 		if err != nil {
+			pool.Client.Logs(docker.LogsOptions{
+				Container:   kafkaContainer.Container.ID,
+				RawTerminal: true,
+			})
 			return err
 		}
 		defer conn.Close()
@@ -97,9 +87,6 @@ func TestMain(t *testing.M) {
 
 	// You can't defer this because os.Exit doesn't care for defer
 	if err := pool.Purge(kafkaContainer); err != nil {
-		log.Fatalf("Could not purge resource: %s", err)
-	}
-	if err := pool.Purge(zkContainer); err != nil {
 		log.Fatalf("Could not purge resource: %s", err)
 	}
 	if err := pool.RemoveNetwork(network); err != nil {

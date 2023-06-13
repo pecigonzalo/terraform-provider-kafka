@@ -14,8 +14,8 @@ on:
       - "README.md"
 
 # Testing only needs permissions to read the repository contents.
-permissions:
-  contents: read
+# permissions:
+#   contents: read
 
 jobs:
   # Ensure project builds before running testing matrix
@@ -34,8 +34,8 @@ jobs:
 
   generate:
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
+    # permissions:
+    #   pull-requests: write
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v4

@@ -39,5 +39,3 @@ resource "kafka_topic" "example" {
 ### Read-Only
 
 - `id` (String) Topic id
-
-

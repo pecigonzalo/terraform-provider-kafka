@@ -73,6 +73,6 @@ jobs:
           terraform_wrapper: false
       - run: go mod download
       - env:
-          TF_ACC: "1"
-        run: go test -v -cover ./internal/provider/
+          TESTARGS: "-cover"
+        run: make testacc
         timeout-minutes: 10

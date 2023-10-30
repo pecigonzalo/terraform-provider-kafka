@@ -10,10 +10,15 @@ services:
       - BRDEBUG=1
       - BITNAMI_DEBUG=true
       - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
-      - KAFKA_CFG_BROKER_RACK=AZ0
       - KAFKA_CFG_NODE_ID=0
+      - KAFKA_CFG_BROKER_RACK=AZ0
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
       - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093
+      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
       - KAFKA_HEAP_OPTS=-Xmx512m -Xms512m
     volumes:
       - kafka_0_data:/bitnami/kafka
@@ -23,13 +28,18 @@ services:
       - "9093:9092"
       - "9093"
     environment:
-      - BRDEBUG=1
-      - BITNAMI_DEBUG=true
+      - BRDEBUG=0
+      - BITNAMI_DEBUG=false
       - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
-      - KAFKA_CFG_BROKER_RACK=AZ1
       - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_BROKER_RACK=AZ1
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
       - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093
+      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
       - KAFKA_HEAP_OPTS=-Xmx512m -Xms512m
     volumes:
       - kafka_1_data:/bitnami/kafka
@@ -39,13 +49,18 @@ services:
       - "9094:9092"
       - "9093"
     environment:
-      - BRDEBUG=1
-      - BITNAMI_DEBUG=true
+      - BRDEBUG=0
+      - BITNAMI_DEBUG=false
       - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
-      - KAFKA_CFG_BROKER_RACK=AZ2
       - KAFKA_CFG_NODE_ID=2
+      - KAFKA_CFG_BROKER_RACK=AZ2
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
       - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093
+      - KAFKA_KRAFT_CLUSTER_ID=abcdefghijklmnopqrstuv
       - KAFKA_HEAP_OPTS=-Xmx512m -Xms512m
     volumes:
       - kafka_2_data:/bitnami/kafka

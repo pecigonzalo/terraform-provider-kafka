@@ -234,8 +234,8 @@ github.com/segmentio/kafka-go v0.4.44 h1:Vjjksniy0WSTZ7CuVJrz1k04UoZeTc77UV6Yyk6
 github.com/segmentio/kafka-go v0.4.44/go.mod h1:HjF6XbOKh0Pjlkr5GVZxt6CsjjwnmhVOfURM5KMd8qg=
 github.com/segmentio/kafka-go/sasl/aws_msk_iam v0.0.0-20220211180808-78889264d070 h1:ng1Z/x5LLOIrzgWUOtypsCkR+dHTux7slqOCVkuwQBo=
 github.com/segmentio/kafka-go/sasl/aws_msk_iam v0.0.0-20220211180808-78889264d070/go.mod h1:IjMUGcOJoATsnlqAProGN1ezXeEgU5GCWr1/EzmkEMA=
-github.com/segmentio/topicctl v1.10.2 h1:Fa/3wDBesxD2RRzSLe91Knyx8bgwgqV760DFiI/NRS4=
-github.com/segmentio/topicctl v1.10.2/go.mod h1:m8+K3V2yIhmPJoukIyE1LsfXC8GGiYa3iMLt2zGqPJc=
+github.com/segmentio/topicctl v1.11.0 h1:t0fcRO8jsNbSoyl2/OmQs1f1/OVZn8SvsEmvJb8d/R4=
+github.com/segmentio/topicctl v1.11.0/go.mod h1:vCI4XEM0iRfQq7ymiix4KsWtFn7P9ieL6LqJajJ4J88=
 github.com/sergi/go-diff v1.2.0 h1:XU+rvMAioB0UC3q1MFrIQy4Vo5/4VsRDQQXHsEya6xQ=
 github.com/shopspring/decimal v1.2.0/go.mod h1:DKyhrW/HYNuLGql+MJL6WCR6knT2jwCFRcu2hWCYk4o=
 github.com/shopspring/decimal v1.3.1 h1:2Usl1nmF/WZucqkFZhnfFYxxxu8LG21F6nPQBE5gKV8=

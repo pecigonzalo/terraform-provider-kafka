@@ -1,6 +1,6 @@
 module github.com/pecigonzalo/terraform-provider-kafka
 
-go 1.22
+go 1.22.6
 
 require (
 	github.com/hashicorp/terraform-plugin-docs v0.19.4
@@ -37,6 +37,7 @@ require (
 	github.com/hashicorp/cli v1.1.6 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/term v0.5.0 // indirect
@@ -64,6 +65,7 @@ require (
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/term v0.19.0 // indirect
+	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

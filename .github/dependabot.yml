@@ -10,3 +10,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      terraform-plugin-runtime:
+        patterns:
+          - "github.com/hashicorp/terraform-plugin-framework"
+          - "github.com/hashicorp/terraform-plugin-go"
+          - "github.com/hashicorp/terraform-plugin-log"
+          - "github.com/hashicorp/terraform-plugin-sdk*"

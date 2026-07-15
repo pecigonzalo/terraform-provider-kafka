@@ -1,5 +1,10 @@
 name: Dependabot auto-approve
-on: pull_request
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
@@ -9,6 +14,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# This privileged workflow must never check out or execute pull request code.
 jobs:
   dependabot:
     runs-on: ubuntu-latest

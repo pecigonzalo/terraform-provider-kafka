@@ -6,6 +6,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
@@ -17,3 +21,6 @@ updates:
           - "github.com/hashicorp/terraform-plugin-go"
           - "github.com/hashicorp/terraform-plugin-log"
           - "github.com/hashicorp/terraform-plugin-sdk*"
+      go-dependencies:
+        patterns:
+          - "*"

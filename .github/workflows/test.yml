@@ -36,6 +36,16 @@ jobs:
       - run: go mod download
       - run: go build -v .
 
+  goreleaser:
+    name: GoReleaser configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          args: check
+
   generate:
     runs-on: ubuntu-latest
     timeout-minutes: 10

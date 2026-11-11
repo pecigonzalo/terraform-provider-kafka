@@ -240,7 +240,7 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	topicInfo, err := r.client.GetTopic(ctx, data.ID.ValueString(), true)
+	topicInfo, err := r.readTopicSettled(ctx, data.ID.ValueString(), data)
 	if err != nil {
 		if errors.Is(err, admin.ErrTopicDoesNotExist) {
 			// If the Topic does not exist, we remove it and return
@@ -536,7 +536,7 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 		waitCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	err = waitForReassignment(waitCtx, reassignmentPollInterval, func(ctx context.Context) (bool, error) {
+	err = pollUntil(waitCtx, reassignmentPollInterval, func(ctx context.Context) (bool, error) {
 		return r.replicaReassignmentDone(ctx, data.Name.ValueString(), int(data.ReplicationFactor.ValueInt64()))
 	})
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -662,6 +662,39 @@ func (r *topicResource) updatePartitions(ctx context.Context, data *TopicResourc
 		return err
 	}
 
+	return r.waitForPartitions(ctx, data.Name.ValueString(), int(data.Partitions.ValueInt64()))
+}
+
+// waitForPartitions waits until the topic reports at least the wanted number of
+// partitions. The client caches topic metadata for several seconds, so a Read
+// straight after adding partitions can still see the old count; waiting here
+// makes the saved state and anything reading the topic afterwards agree.
+func (r *topicResource) waitForPartitions(ctx context.Context, topic string, want int) error {
+	waitCtx := ctx
+	timeout := r.client.GetConnector().KafkaClient.Timeout
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	err := pollUntil(waitCtx, partitionPollInterval, func(ctx context.Context) (bool, error) {
+		info, err := r.client.GetTopic(ctx, topic, false)
+		if err != nil {
+			return false, err
+		}
+		return len(info.Partitions) >= want, nil
+	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf(
+			"timed out after %s waiting for topic %q to report %d partitions; "+
+				"the partitions were added, so run terraform plan again to refresh the actual state: %w",
+			timeout, topic, want, err,
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("waiting for partitions of topic %q: %w", topic, err)
+	}
 	return nil
 }
 

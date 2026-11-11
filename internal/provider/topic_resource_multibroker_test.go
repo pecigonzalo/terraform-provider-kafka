@@ -10,16 +10,8 @@ import (
 // TestAccTopicResourceReplicationFactorMultiBroker changes replication factor
 // and then partitions on real brokers, so the reassignment wait and its request
 // timeout are exercised end to end, and new partitions must get the topic's
-// replication factor. The default acceptance cluster has one broker, so this
-// test starts its own three-broker cluster when KAFKA_TEST_BROKERS=3:
-//
-//	KAFKA_TEST_BROKERS=3 TF_ACC=1 \
-//	  go test ./internal/provider -run TestAccTopicResourceReplicationFactorMultiBroker
+// replication factor.
 func TestAccTopicResourceReplicationFactorMultiBroker(t *testing.T) {
-	if clusterBrokerCount() < 3 {
-		t.Skip("set KAFKA_TEST_BROKERS=3 to run this against a three-broker cluster")
-	}
-
 	resource.Test(t, resource.TestCase{
 		TerraformVersionChecks:   []tfversion.TerraformVersionCheck{tfversion.SkipBelow(tfversion.Version1_8_0)},
 		PreCheck:                 func() { testAccPreCheck(t) },

@@ -176,9 +176,9 @@ func TestAccTopicResourceReplicationFactorExceedsBrokers(t *testing.T) {
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
-			// The test cluster has a single broker, so replication_factor = 2 must fail at plan time
+			// One more replica than the cluster has brokers must fail at plan time
 			{
-				Config:      testAccTopicResourceConfig("replication-topic", 1, 2),
+				Config:      testAccTopicResourceConfig("replication-topic", 1, clusterBrokers+1),
 				PlanOnly:    true,
 				ExpectError: regexp.MustCompile(`(?i)replication\s+factor\s+cannot\s+be\s+higher`),
 			},

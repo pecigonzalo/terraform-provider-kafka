@@ -101,17 +101,9 @@ Terraform installed.
 make testacc
 ```
 
-The default suite runs against a single broker. Tests that change replication
-factor or add partitions need several brokers; they are skipped unless
-`KAFKA_TEST_BROKERS=3` is set, which starts a three-broker KRaft cluster for the
-run. Run just those with:
-
-```shell
-make testacc-multibroker
-```
-
-CI runs both. Every run starts its own containers on a free port, so runs can
-execute in parallel.
+Acceptance tests run against a three-broker KRaft cluster, so replication
+factor and partition changes are tested on real replicas. Every run starts its
+own containers on free ports, so runs can execute in parallel.
 
 ## FAQ
 

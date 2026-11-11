@@ -9,10 +9,14 @@ import (
 // reassignment that Kafka has not finished yet.
 const reassignmentPollInterval = 2 * time.Second
 
-// waitForReassignment calls done until it reports true. It sleeps interval
+// partitionPollInterval is how long to wait between checks that added
+// partitions are visible.
+const partitionPollInterval = 500 * time.Millisecond
+
+// pollUntil calls done until it reports true. It sleeps interval
 // between calls. It returns the first error from done, or ctx.Err() if ctx
 // ends before done reports true.
-func waitForReassignment(ctx context.Context, interval time.Duration, done func(context.Context) (bool, error)) error {
+func pollUntil(ctx context.Context, interval time.Duration, done func(context.Context) (bool, error)) error {
 	for {
 		// Check first so a cancelled context never starts another poll.
 		if err := ctx.Err(); err != nil {

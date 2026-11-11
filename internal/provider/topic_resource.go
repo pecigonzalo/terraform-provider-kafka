@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	kafka "github.com/segmentio/kafka-go"
@@ -67,24 +69,20 @@ func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Topic name",
 				Required:            true,
+				Validators:          []validator.String{stringvalidator.LengthBetween(1, 249)},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
-					stringplanmodifier.UseStateForUnknown(),
 				},
 			},
 			"partitions": schema.Int64Attribute{
 				MarkdownDescription: "Topic partitions count",
 				Required:            true,
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
-				},
+				Validators:          []validator.Int64{int64validator.AtLeast(1)},
 			},
 			"replication_factor": schema.Int64Attribute{
 				MarkdownDescription: "Topic replication factor count",
 				Required:            true,
-				PlanModifiers: []planmodifier.Int64{
-					int64planmodifier.UseStateForUnknown(),
-				},
+				Validators:          []validator.Int64{int64validator.AtLeast(1)},
 			},
 			"configuration": schema.MapAttribute{
 				MarkdownDescription: "Topic configuration overrides. Only the keys set here are managed; " +

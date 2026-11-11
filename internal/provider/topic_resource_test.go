@@ -216,3 +216,20 @@ resource "kafka_topic" "test" {
 }
 `, name, retention)
 }
+
+func TestAccTopicResourceInvalid(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTopicResourceConfig("invalid", 0, 1),
+				ExpectError: regexp.MustCompile(`(?s)partitions.*at least 1`),
+			},
+			{
+				Config:      testAccTopicResourceConfig("invalid", 1, 0),
+				ExpectError: regexp.MustCompile(`(?s)replication_factor.*at least 1`),
+			},
+		},
+	})
+}

@@ -246,7 +246,7 @@ func (p *kafkaProvider) bootstrapServer(configured []types.String) (string, erro
 			return server, nil
 		}
 	}
-	for _, server := range strings.Split(p.getEnv("BOOTSTRAP_SERVERS", ""), ",") {
+	for server := range strings.SplitSeq(p.getEnv("BOOTSTRAP_SERVERS", ""), ",") {
 		if server = strings.TrimSpace(server); server != "" {
 			return server, nil
 		}

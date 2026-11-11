@@ -64,13 +64,17 @@ func TestMain(t *testing.M) {
 	waitForKafka := func() error {
 		conn, err := kafka.Dial("tcp", "localhost:9092")
 		if err != nil {
-			pool.Client.Logs(docker.LogsOptions{
+			// Best-effort diagnostics; the dial error is what gets returned.
+			_ = pool.Client.Logs(docker.LogsOptions{
 				Container:   kafkaContainer.Container.ID,
 				RawTerminal: true,
 			})
 			return err
 		}
-		defer conn.Close()
+		defer func() {
+			// Closing a probe connection; nothing useful to do on failure.
+			_ = conn.Close()
+		}()
 
 		_, err = conn.ApiVersions()
 		if err != nil {

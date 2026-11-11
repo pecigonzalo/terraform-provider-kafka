@@ -10,11 +10,10 @@ import (
 const (
 	// providerConfig is a shared configuration to combine with the actual
 	// test configuration so the Kafka client is properly configured.
-	// It is also possible to use the KAFKA_ environment variables instead,
-	// such as updating the Makefile and running the testing through that tool.
+	// The bootstrap server is not set here: TestMain starts an isolated Kafka
+	// on a free port and exports it as KAFKA_BOOTSTRAP_SERVERS.
 	providerConfig = `
 provider "kafka" {
-  bootstrap_servers = ["127.0.0.1:9092"]
   tls = {
     enabled = false
   }

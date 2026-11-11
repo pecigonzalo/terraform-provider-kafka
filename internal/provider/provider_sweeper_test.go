@@ -54,7 +54,7 @@ func TestMain(t *testing.M) {
 		Hostname:  "kafka",
 		NetworkID: network.Network.ID,
 		PortBindings: map[docker.Port][]docker.PortBinding{
-			"9092/tcp": {{HostIP: "localhost", HostPort: "9092/tcp"}},
+			"9092/tcp": {{HostIP: "127.0.0.1", HostPort: "9092/tcp"}},
 		},
 	})
 	if err != nil {

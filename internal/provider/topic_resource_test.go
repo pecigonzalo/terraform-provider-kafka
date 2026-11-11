@@ -233,3 +233,24 @@ func TestAccTopicResourceInvalid(t *testing.T) {
 		},
 	})
 }
+
+func TestAccTopicResourceNameValidation(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTopicResourceConfig("invalid/name", 1, 1),
+				ExpectError: regexp.MustCompile(`(?s)name.*must contain only ASCII letters`),
+			},
+			{
+				Config:      testAccTopicResourceConfig("..", 1, 1),
+				ExpectError: regexp.MustCompile(`(?s)name.*must be none of`),
+			},
+			{
+				Config:      testAccTopicResourceConfig(".", 1, 1),
+				ExpectError: regexp.MustCompile(`(?s)name.*must be none of`),
+			},
+		},
+	})
+}

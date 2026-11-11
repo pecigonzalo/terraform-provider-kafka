@@ -28,7 +28,7 @@ resource "kafka_topic" "example" {
 
 ### Required
 
-- `name` (String) Topic name
+- `name` (String) Topic name. Must be 1 to 249 characters long, contain only ASCII letters, digits, `.`, `_` and `-`, and must not be `.` or `..`.
 - `partitions` (Number) Topic partitions count
 - `replication_factor` (Number) Topic replication factor count
 

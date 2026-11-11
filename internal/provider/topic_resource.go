@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
@@ -23,6 +24,9 @@ import (
 	"github.com/segmentio/topicctl/pkg/apply/extenders"
 	"github.com/segmentio/topicctl/pkg/apply/pickers"
 )
+
+// topicNameCharsRegexp matches the characters Kafka allows in topic names.
+var topicNameCharsRegexp = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 
 // Ensure provider defined types fully satisfy framework interfaces
 var (
@@ -67,9 +71,17 @@ func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				},
 			},
 			"name": schema.StringAttribute{
-				MarkdownDescription: "Topic name",
-				Required:            true,
-				Validators:          []validator.String{stringvalidator.LengthBetween(1, 249)},
+				MarkdownDescription: "Topic name. Must be 1 to 249 characters long, contain only ASCII letters, " +
+					"digits, `.`, `_` and `-`, and must not be `.` or `..`.",
+				Required: true,
+				Validators: []validator.String{
+					stringvalidator.LengthBetween(1, 249),
+					stringvalidator.RegexMatches(
+						topicNameCharsRegexp,
+						"must contain only ASCII letters, digits, '.', '_' or '-'",
+					),
+					stringvalidator.NoneOf(".", ".."),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},

@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -114,7 +116,7 @@ func (r *topicResource) Configure(_ context.Context, req resource.ConfigureReque
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *http.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *admin.BrokerAdminClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
 		return
@@ -134,15 +136,7 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 	}
 
 	// Generate KafkaConfig
-	var configEntries []kafka.ConfigEntry
-	for k, v := range data.Config.Elements() {
-		configEntries = append(configEntries, kafka.ConfigEntry{
-			ConfigName: k,
-			// TODO: Why do we have to do this ugly remove quotes?
-			// Lets try and fix this in the datamodel or similar
-			ConfigValue: v.String()[1 : len(v.String())-1],
-		})
-	}
+	configEntries := configEntries(data.Config)
 	topicConfig := kafka.TopicConfig{
 		Topic:             data.Name.ValueString(),
 		NumPartitions:     int(data.Partitions.ValueInt64()),
@@ -250,7 +244,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 
 	if !data.Config.Equal(state.Config) {
 		tflog.Info(ctx, "Updating topic configuration")
-		err := r.updateConfig(ctx, data, req, resp)
+		err := r.updateConfig(ctx, data)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic configuration, got error: %s", err))
 			return
@@ -258,7 +252,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	if !data.ReplicationFactor.Equal(state.ReplicationFactor) {
 		tflog.Info(ctx, "Updating topic replication factor")
-		err := r.updateReplicationFactor(ctx, state, data, req, resp)
+		err := r.updateReplicationFactor(ctx, data)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic replication factor, got error: %s", err))
 			return
@@ -266,7 +260,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	if !data.Partitions.Equal(state.Partitions) {
 		tflog.Info(ctx, "Updating topic partitions")
-		err := r.updatePartitions(ctx, state, data, req, resp)
+		err := r.updatePartitions(ctx, data)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic partitions, got error: %s", err))
 			return
@@ -277,17 +271,9 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
+func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel) error {
 	// Generate KafkaConfig
-	var configEntries []kafka.ConfigEntry
-	for k, v := range data.Config.Elements() {
-		configEntries = append(configEntries, kafka.ConfigEntry{
-			ConfigName: k,
-			// TODO: Why do we have to do this ugly remove quotes?
-			// Lets try and fix this in the datamodel or similar
-			ConfigValue: v.String()[1 : len(v.String())-1],
-		})
-	}
+	configEntries := configEntries(data.Config)
 
 	alterConfigsRequest := kafka.AlterConfigsRequest{
 		Resources: []kafka.AlterConfigRequestResource{
@@ -309,6 +295,22 @@ func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceMod
 	return nil
 }
 
+// configEntries converts a Terraform map of strings into Kafka config entries.
+func configEntries(config types.Map) []kafka.ConfigEntry {
+	var entries []kafka.ConfigEntry
+	for k, v := range config.Elements() {
+		str, ok := v.(types.String)
+		if !ok || str.IsNull() || str.IsUnknown() {
+			continue
+		}
+		entries = append(entries, kafka.ConfigEntry{
+			ConfigName:  k,
+			ConfigValue: str.ValueString(),
+		})
+	}
+	return entries
+}
+
 // Generate a AlterConfigRequestConfig from ConfigEntry
 func configEntriesToAlterConfigs(
 	configEntries []kafka.ConfigEntry,
@@ -326,7 +328,7 @@ func configEntriesToAlterConfigs(
 	return apiConfigs
 }
 
-func (r *topicResource) updateReplicationFactor(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
+func (r *topicResource) updateReplicationFactor(ctx context.Context, data *TopicResourceModel) error {
 	brokerIDs, err := r.client.GetBrokerIDs(ctx)
 	if err != nil {
 		return err
@@ -362,8 +364,16 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		}
 	}
 
+	// Use the live replica count, not state, which may be stale
+	replicasPresent64, err := replicaCount(topicInfo)
+	if err != nil {
+		return err
+	}
 	replicasWanted := data.ReplicationFactor.ValueInt64()
-	replicasPresent := state.ReplicationFactor.ValueInt64()
+	replicasPresent := int64(replicasPresent64)
+	if replicasWanted == replicasPresent {
+		return nil
+	}
 
 	var newPartitionsInfo []admin.PartitionInfo
 	for _, partition := range topicInfo.Partitions {
@@ -410,7 +420,7 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		return err
 	}
 	if clientResp.Error != nil {
-		return err
+		return clientResp.Error
 	}
 	if len(clientResp.PartitionResults) > 0 {
 		partErrors := []error{}
@@ -426,49 +436,36 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, state *Topi
 	return nil
 }
 
-func containsId(id int, ids []int) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
-}
-
+// increaseReplicas returns a new replica list grown to the desired size using
+// brokers not already hosting a replica. The input slice is not modified.
 func increaseReplicas(desired int, replicas []int, brokerIDs []int) []int {
-	newReplicas := replicas
+	newReplicas := slices.Clone(replicas)
 	for _, id := range brokerIDs {
-		if !containsId(id, newReplicas) {
-			newReplicas = append(newReplicas, id)
+		if len(newReplicas) >= desired {
+			break
 		}
-		if len(newReplicas) == desired {
-			return newReplicas
+		if !slices.Contains(newReplicas, id) {
+			newReplicas = append(newReplicas, id)
 		}
 	}
 	return newReplicas
 }
 
+// reduceReplicas returns a new replica list shrunk to the desired size. The
+// leader is always kept; other replicas are dropped from the end of the list.
+// The input slice is not modified.
 func reduceReplicas(desired int, replicas []int, leader int) []int {
-	if len(replicas) > desired {
-		newReplicas := []int{}
-		for i, replica := range replicas {
-			if replica == leader {
-				continue
-			} else {
-				newReplicas = append(replicas[:i], replicas[i+1:]...)
-			}
+	newReplicas := slices.Clone(replicas)
+	for i := len(newReplicas) - 1; i >= 0 && len(newReplicas) > desired; i-- {
+		if newReplicas[i] == leader {
+			continue
 		}
-		return reduceReplicas(desired, newReplicas, leader)
-	} else {
-		return replicas
+		newReplicas = slices.Delete(newReplicas, i, i+1)
 	}
+	return newReplicas
 }
 
-func (r *topicResource) updatePartitions(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
-	if data.Partitions.ValueInt64() < state.Partitions.ValueInt64() {
-		return fmt.Errorf("partition count can't be reduced")
-	}
-
+func (r *topicResource) updatePartitions(ctx context.Context, data *TopicResourceModel) error {
 	brokerIDs, err := r.client.GetBrokerIDs(ctx)
 	if err != nil {
 		return err
@@ -482,12 +479,20 @@ func (r *topicResource) updatePartitions(ctx context.Context, state *TopicResour
 		return err
 	}
 
+	// Use the live partition count, not state, which may be stale
+	currentPartitions := len(topicInfo.Partitions)
+	if int(data.Partitions.ValueInt64()) < currentPartitions {
+		return fmt.Errorf("partition count can't be reduced from %d to %d", currentPartitions, data.Partitions.ValueInt64())
+	}
+	extraPartitions := int(data.Partitions.ValueInt64()) - currentPartitions
+	if extraPartitions == 0 {
+		return nil
+	}
+
 	currAssignments := topicInfo.ToAssignments()
 	for _, b := range brokersInfo {
 		tflog.Debug(ctx, fmt.Sprintf("Broker ID: %v Rack: %s", b.ID, b.Rack))
 	}
-	extraPartitions := int(data.Partitions.ValueInt64()) - int(state.Partitions.ValueInt64())
-
 	picker := pickers.NewRandomizedPicker()
 	extender := extenders.NewBalancedExtender(
 		brokersInfo,
@@ -533,8 +538,11 @@ func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	}
 	for _, v := range clientResp.Errors {
 		if v != nil {
-			kafkaError := v.(kafka.Error)
-			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", kafkaError.Error()))
+			// A topic that is already gone is the desired end state
+			if errors.Is(v, kafka.UnknownTopicOrPartition) {
+				continue
+			}
+			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", v))
 			return
 		}
 	}

@@ -35,6 +35,7 @@ jobs:
           cache: true
       - run: go mod download
       - run: go build -v .
+      - run: go vet ./...
 
   goreleaser:
     name: GoReleaser configuration

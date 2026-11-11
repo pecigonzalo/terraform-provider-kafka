@@ -1,5 +1,5 @@
 x-kafka-common: &kafka-common
-  image: apache/kafka:3.9.0
+  image: apache/kafka:3.9.1
   environment: &kafka-common-env
     CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
     KAFKA_PROCESS_ROLES: broker,controller

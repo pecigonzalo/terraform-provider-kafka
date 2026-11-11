@@ -24,7 +24,7 @@ type topicDataSource struct {
 	client *admin.BrokerAdminClient
 }
 
-// TopicDataSourceModel describes the data source data model.
+// topicDataSourceModel describes the data source data model.
 type topicDataSourceModel struct {
 	ID                types.String `tfsdk:"id"`
 	Name              types.String `tfsdk:"name"`
@@ -44,7 +44,8 @@ func (d *topicDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				Computed: true,
+				MarkdownDescription: "Topic id, the same as the topic name",
+				Computed:            true,
 			},
 			"name": schema.StringAttribute{
 				MarkdownDescription: "Topic name",
@@ -63,7 +64,7 @@ func (d *topicDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 				Computed:            true,
 			},
 			"configuration": schema.MapAttribute{
-				MarkdownDescription: "Configuration version",
+				MarkdownDescription: "Topic configuration, including broker defaults",
 				ElementType:         types.StringType,
 				Computed:            true,
 			},

@@ -21,7 +21,7 @@ A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmenti
 ## Requirements
 
 - [Terraform](https://www.terraform.io/downloads.html) >= 1.0
-- [Go](https://golang.org/doc/install) >= 1.18
+- [Go](https://golang.org/doc/install) >= 1.25
 
 ### Optional
 
@@ -54,7 +54,35 @@ Then commit the changes to `go.mod` and `go.sum`.
 
 ## Using the provider
 
-Fill this in for each provider
+```terraform
+terraform {
+  required_providers {
+    kafka = {
+      source = "pecigonzalo/kafka"
+    }
+  }
+}
+
+provider "kafka" {
+  bootstrap_servers = ["localhost:9092"]
+  tls  = { enabled = false }
+  sasl = { enabled = false }
+}
+
+resource "kafka_topic" "example" {
+  name               = "example"
+  partitions         = 3
+  replication_factor = 1
+  configuration = {
+    "retention.ms" = "60000"
+  }
+}
+```
+
+The provider can also be configured with the `KAFKA_BOOTSTRAP_SERVERS`,
+`KAFKA_SASL_ENABLED`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`,
+`KAFKA_SASL_PASSWORD` and `KAFKA_TIMEOUT` environment variables. TLS and SASL are
+enabled by default. See the [documentation](docs/) for all options.
 
 ## Developing the Provider
 
@@ -66,7 +94,8 @@ To generate or update documentation, run `go generate`.
 
 In order to run the full suite of Acceptance tests, run `make testacc`.
 
-_Note:_ Acceptance tests create real resources, and often cost money to run.
+_Note:_ Acceptance tests start a local Kafka container with Docker and need
+Terraform installed.
 
 ```shell
 make testacc

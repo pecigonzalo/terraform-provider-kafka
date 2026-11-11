@@ -447,7 +447,60 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 			return fmt.Errorf("errors changing replication factor: %s", partErrors)
 		}
 	}
+
+	// The reassignment is asynchronous. Wait for it to finish so that the
+	// next Read and the saved state reflect the cluster, not the plan.
+	waitCtx := ctx
+	timeout := r.client.GetConnector().KafkaClient.Timeout
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	err = waitForReassignment(waitCtx, reassignmentPollInterval, func(ctx context.Context) (bool, error) {
+		return r.replicaReassignmentDone(ctx, data.Name.ValueString(), int(data.ReplicationFactor.ValueInt64()))
+	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf(
+			"timed out after %s waiting for Kafka to finish reassigning replicas of topic %q to replication factor %d; "+
+				"the reassignment may still be in progress, so run terraform plan again to refresh the actual state: %w",
+			timeout, data.Name.ValueString(), data.ReplicationFactor.ValueInt64(), err,
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("waiting for replica reassignment of topic %q: %w", data.Name.ValueString(), err)
+	}
 	return nil
+}
+
+// replicaReassignmentDone reports whether every partition of the topic has the
+// desired replica count and no partition reassignment is still in progress.
+func (r *topicResource) replicaReassignmentDone(ctx context.Context, topic string, replicationFactor int) (bool, error) {
+	topicInfo, err := r.client.GetTopic(ctx, topic, false)
+	if err != nil {
+		return false, err
+	}
+
+	partitionIDs := make([]int, 0, len(topicInfo.Partitions))
+	for _, partition := range topicInfo.Partitions {
+		if len(partition.Replicas) != replicationFactor {
+			return false, nil
+		}
+		partitionIDs = append(partitionIDs, partition.ID)
+	}
+
+	listResp, err := r.client.GetConnector().KafkaClient.ListPartitionReassignments(ctx, &kafka.ListPartitionReassignmentsRequest{
+		Topics: map[string]kafka.ListPartitionReassignmentsRequestTopic{
+			topic: {PartitionIndexes: partitionIDs},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	if listResp.Error != nil {
+		return false, listResp.Error
+	}
+	return len(listResp.Topics[topic].Partitions) == 0, nil
 }
 
 // increaseReplicas returns a new replica list grown to the desired size using

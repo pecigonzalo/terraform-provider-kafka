@@ -46,7 +46,7 @@ type SASLConfigModel struct {
 	Password  types.String `tfsdk:"password"`
 }
 
-// TLSConfigModel describes a SASL Authentication configuration
+// TLSConfigModel describes a TLS configuration
 type TLSConfigModel struct {
 	Enabled    types.Bool `tfsdk:"enabled"`
 	SkipVerify types.Bool `tfsdk:"skip_verify"`
@@ -88,7 +88,7 @@ func (p *kafkaProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 						Optional:            true,
 					},
 					"mechanism": schema.StringAttribute{
-						MarkdownDescription: "SASL mechanism to use. One of plain, scram-sha512, scram-sha256, aws-msk-iam (default: aws-msk-iam)",
+						MarkdownDescription: "SASL mechanism to use. One of plain, scram-sha256, scram-sha512, aws-msk-iam (default: aws-msk-iam)",
 						Optional:            true,
 					},
 					"username": schema.StringAttribute{
@@ -124,7 +124,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if len(config.BootstrapServers) >= 1 && config.BootstrapServers[0].IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("bootstrap_servers"),
-			"Unknown Kakfa bootstrap servers",
+			"Unknown Kafka bootstrap servers",
 			"The provider cannot create the Kafka client as there is an unknown configuration value. "+
 				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_BOOTSTRAP_SERVERS environment variable.", envVarPrefix),
 		)
@@ -135,7 +135,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 			path.Root("sasl.username"),
 			"Unknown Kafka SASL username",
 			"The provider cannot create the Kafka client as there is an unknown configuration value for the SASL username. "+
-				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_SASL_USERNAMAE environment variable.", envVarPrefix),
+				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_SASL_USERNAME environment variable.", envVarPrefix),
 		)
 	}
 	if config.SASL.Password.IsUnknown() {
@@ -170,7 +170,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		saslConfigEnabled = config.SASL.Enabled.ValueBool()
 	}
 	if saslConfigEnabled {
-		saslConfig, err := p.generateSASLConfig(ctx, config.SASL, resp)
+		saslConfig, err := p.generateSASLConfig(config.SASL)
 		if err != nil {
 			resp.Diagnostics.AddError("Unable to create Kafka client", err.Error())
 			return
@@ -220,42 +220,49 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	tflog.Info(ctx, "Configured Kafka client", map[string]any{"success": true})
 }
 
-// generateSASLConfig returns a SASLConfig{} or an error given a SASLModel
-func (p *kafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigModel, resp *provider.ConfigureResponse) (admin.SASLConfig, error) {
+// generateSASLConfig returns a SASLConfig{} or an error given a SASLModel.
+// Values set in the configuration take precedence over environment variables.
+func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (admin.SASLConfig, error) {
+	mechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
+	if !sasl.Mechanism.IsNull() {
+		mechanism = sasl.Mechanism.ValueString()
+	}
+	username := p.getEnv("SASL_USERNAME", "")
+	if !sasl.Username.IsNull() {
+		username = sasl.Username.ValueString()
+	}
+	password := p.getEnv("SASL_PASSWORD", "")
+	if !sasl.Password.IsNull() {
+		password = sasl.Password.ValueString()
+	}
 
-	saslMechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
-	if !sasl.Mechanism.IsNull() {
-		saslMechanism = sasl.Mechanism.ValueString()
-	}
-	saslUsername := p.getEnv("SASL_USERNAME", "")
-	if !sasl.Mechanism.IsNull() {
-		saslUsername = sasl.Username.ValueString()
-	}
-	saslPassword := p.getEnv("SASL_PASSWORD", "")
-	if !sasl.Mechanism.IsNull() {
-		saslPassword = sasl.Password.ValueString()
-	}
+	// Accept both "scram-sha256" and "scram-sha-256" style names.
+	normalized := strings.ToLower(strings.TrimSpace(mechanism))
+	normalized = strings.ReplaceAll(normalized, "scram-sha-", "scram-sha")
 
-	switch admin.SASLMechanism(saslMechanism) {
-	case admin.SASLMechanismScramSHA512:
-	case admin.SASLMechanismScramSHA256:
-	case admin.SASLMechanismPlain:
-		tflog.SetField(ctx, "kafka_sasl_username", saslUsername)
-		tflog.SetField(ctx, "kafka_sasl_password", saslPassword)
-		tflog.MaskFieldValuesWithFieldKeys(ctx, "kafka_sasl_password")
-		return admin.SASLConfig{
-			Enabled:   true,
-			Mechanism: admin.SASLMechanismScramSHA256,
-			Username:  saslUsername,
-			Password:  saslPassword,
-		}, nil
-	case admin.SASLMechanismAWSMSKIAM:
+	var saslMechanism admin.SASLMechanism
+	switch normalized {
+	case "plain":
+		saslMechanism = admin.SASLMechanismPlain
+	case "scram-sha256":
+		saslMechanism = admin.SASLMechanismScramSHA256
+	case "scram-sha512":
+		saslMechanism = admin.SASLMechanismScramSHA512
+	case "aws-msk-iam":
 		return admin.SASLConfig{
 			Enabled:   true,
 			Mechanism: admin.SASLMechanismAWSMSKIAM,
 		}, nil
+	default:
+		return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %q", mechanism)
 	}
-	return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %s", sasl.Mechanism.ValueString())
+
+	return admin.SASLConfig{
+		Enabled:   true,
+		Mechanism: saslMechanism,
+		Username:  username,
+		Password:  password,
+	}, nil
 }
 
 func (p *kafkaProvider) Resources(ctx context.Context) []func() resource.Resource {

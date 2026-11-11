@@ -179,7 +179,11 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 
 	// Configure TLS settings
-	brokerConfig.TLS.Enabled = config.TLS.Enabled.ValueBool()
+	// TLS is enabled unless explicitly disabled, as documented in the schema
+	brokerConfig.TLS.Enabled = true
+	if !config.TLS.Enabled.IsNull() {
+		brokerConfig.TLS.Enabled = config.TLS.Enabled.ValueBool()
+	}
 	brokerConfig.TLS.SkipVerify = config.TLS.SkipVerify.ValueBool()
 
 	// Configure timeout

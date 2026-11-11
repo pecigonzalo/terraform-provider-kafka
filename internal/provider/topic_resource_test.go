@@ -161,10 +161,26 @@ func TestAccTopicResourcePartitions(t *testing.T) {
 				Config: testAccTopicResourceConfig("partitions-topic", 3, 1),
 				Check:  resource.TestCheckResourceAttr("kafka_topic.test", "partitions", "3"),
 			},
-			// Shrinking is not supported by Kafka and must error
+			// Shrinking is not supported by Kafka and must fail at plan time
 			{
 				Config:      testAccTopicResourceConfig("partitions-topic", 2, 1),
-				ExpectError: regexp.MustCompile(`can't be\s+reduced`),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`partitions\s+can't\s+be\s+reduced`),
+			},
+		},
+	})
+}
+
+func TestAccTopicResourceReplicationFactorExceedsBrokers(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// The test cluster has a single broker, so replication_factor = 2 must fail at plan time
+			{
+				Config:      testAccTopicResourceConfig("replication-topic", 1, 2),
+				PlanOnly:    true,
+				ExpectError: regexp.MustCompile(`(?i)replication\s+factor\s+cannot\s+be\s+higher`),
 			},
 		},
 	})

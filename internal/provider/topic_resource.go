@@ -29,6 +29,7 @@ var (
 	_ resource.Resource                = &topicResource{}
 	_ resource.ResourceWithConfigure   = &topicResource{}
 	_ resource.ResourceWithImportState = &topicResource{}
+	_ resource.ResourceWithModifyPlan  = &topicResource{}
 )
 
 func NewTopicResource() resource.Resource {
@@ -112,6 +113,69 @@ func (r *topicResource) Configure(_ context.Context, req resource.ConfigureReque
 	}
 
 	r.client = client
+}
+
+// ModifyPlan rejects changes Kafka cannot apply, so they fail at plan time
+// instead of partway through apply. The apply-time checks remain as a safety net.
+func (r *topicResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	// Destroy has a null plan: there is nothing to validate.
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+
+	// Create has a null state.
+	var plan, state *TopicResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if !req.State.Raw.IsNull() {
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if state != nil {
+		validatePartitionsNotReduced(plan, state, resp)
+	}
+	if state == nil || !plan.ReplicationFactor.Equal(state.ReplicationFactor) {
+		r.validateReplicationFactorAtPlan(ctx, plan, resp)
+	}
+}
+
+// validatePartitionsNotReduced errors when the planned partition count is below the current one.
+func validatePartitionsNotReduced(plan, state *TopicResourceModel, resp *resource.ModifyPlanResponse) {
+	if plan.Partitions.IsUnknown() || state.Partitions.IsNull() {
+		return
+	}
+	if plan.Partitions.ValueInt64() < state.Partitions.ValueInt64() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("partitions"),
+			"Partition count can't be reduced",
+			fmt.Sprintf("Kafka does not support removing partitions: partitions can't be reduced from %d to %d.",
+				state.Partitions.ValueInt64(), plan.Partitions.ValueInt64()),
+		)
+	}
+}
+
+// validateReplicationFactorAtPlan errors when the planned replication factor is above the broker count.
+// It skips the check when the value is unknown or the provider is not configured yet.
+func (r *topicResource) validateReplicationFactorAtPlan(ctx context.Context, plan *TopicResourceModel, resp *resource.ModifyPlanResponse) {
+	if plan.ReplicationFactor.IsUnknown() || r.client == nil {
+		return
+	}
+	brokerIDs, err := r.client.GetBrokerIDs(ctx)
+	if err != nil {
+		// The cluster may be unreachable during plan; apply repeats this check.
+		tflog.Debug(ctx, fmt.Sprintf("Skipping replication factor plan check: %s", err))
+		return
+	}
+	if plan.ReplicationFactor.ValueInt64() > int64(len(brokerIDs)) {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("replication_factor"),
+			"Replication factor exceeds broker count",
+			fmt.Sprintf("Replication factor cannot be higher than the number of brokers: requested %d, cluster has %d brokers.",
+				plan.ReplicationFactor.ValueInt64(), len(brokerIDs)),
+		)
+	}
 }
 
 func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

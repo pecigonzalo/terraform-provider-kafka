@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
+	kafka "github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -125,4 +128,14 @@ func TestReduceReplicas(t *testing.T) {
 	newReplicas = reduceReplicas(desiredCount, currentReplicas, leader)
 
 	assert.Equal(expectedReplicas, newReplicas, "Increase replica expected should be the same")
+}
+
+func TestConfigEntries(t *testing.T) {
+	m := types.MapValueMust(types.StringType, map[string]attr.Value{
+		"retention.ms": types.StringValue(`say "hi"`),
+		"null.value":   types.StringNull(),
+	})
+	entries := configEntries(m)
+	assert.Equal(t, []kafka.ConfigEntry{{ConfigName: "retention.ms", ConfigValue: `say "hi"`}}, entries)
+	assert.Empty(t, configEntries(types.MapNull(types.StringType)))
 }

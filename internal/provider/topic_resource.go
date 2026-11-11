@@ -135,15 +135,7 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 	}
 
 	// Generate KafkaConfig
-	var configEntries []kafka.ConfigEntry
-	for k, v := range data.Config.Elements() {
-		configEntries = append(configEntries, kafka.ConfigEntry{
-			ConfigName: k,
-			// TODO: Why do we have to do this ugly remove quotes?
-			// Lets try and fix this in the datamodel or similar
-			ConfigValue: v.String()[1 : len(v.String())-1],
-		})
-	}
+	configEntries := configEntries(data.Config)
 	topicConfig := kafka.TopicConfig{
 		Topic:             data.Name.ValueString(),
 		NumPartitions:     int(data.Partitions.ValueInt64()),
@@ -280,15 +272,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 
 func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
 	// Generate KafkaConfig
-	var configEntries []kafka.ConfigEntry
-	for k, v := range data.Config.Elements() {
-		configEntries = append(configEntries, kafka.ConfigEntry{
-			ConfigName: k,
-			// TODO: Why do we have to do this ugly remove quotes?
-			// Lets try and fix this in the datamodel or similar
-			ConfigValue: v.String()[1 : len(v.String())-1],
-		})
-	}
+	configEntries := configEntries(data.Config)
 
 	alterConfigsRequest := kafka.AlterConfigsRequest{
 		Resources: []kafka.AlterConfigRequestResource{
@@ -308,6 +292,22 @@ func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceMod
 		return v
 	}
 	return nil
+}
+
+// configEntries converts a Terraform map of strings into Kafka config entries.
+func configEntries(config types.Map) []kafka.ConfigEntry {
+	var entries []kafka.ConfigEntry
+	for k, v := range config.Elements() {
+		str, ok := v.(types.String)
+		if !ok || str.IsNull() || str.IsUnknown() {
+			continue
+		}
+		entries = append(entries, kafka.ConfigEntry{
+			ConfigName:  k,
+			ConfigValue: str.ValueString(),
+		})
+	}
+	return entries
 }
 
 // Generate a AlterConfigRequestConfig from ConfigEntry

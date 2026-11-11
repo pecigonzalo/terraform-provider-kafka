@@ -50,7 +50,7 @@ provider "kafka" {
 Optional:
 
 - `enabled` (Boolean) Enable SASL Authentication
-- `mechanism` (String) SASL mechanism to use. One of plain, scram-sha256, scram-sha512, aws-msk-iam (default: aws-msk-iam)
+- `mechanism` (String) SASL mechanism to use. One of plain, scram-sha512, scram-sha256, aws-msk-iam (default: aws-msk-iam)
 - `password` (String, Sensitive) Password for SASL authentication
 - `username` (String, Sensitive) Username for SASL authentication
 

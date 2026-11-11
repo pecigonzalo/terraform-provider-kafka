@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -207,11 +208,9 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
 		return
 	}
-	for _, v := range clientResp.Errors {
-		if v != nil {
-			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to create topic, got error: %s", v))
-			return
-		}
+	if err := joinErrors(clientResp.Errors, topicName); err != nil {
+		resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
+		return
 	}
 	data.ID = data.Name
 	tflog.Trace(ctx, "Created topic")
@@ -344,10 +343,34 @@ func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceMod
 	if err != nil {
 		return err
 	}
-	for _, v := range clientResp.Errors {
-		return v
+	return joinErrors(clientResp.Errors, func(res kafka.AlterConfigsResponseResource) string {
+		return fmt.Sprintf("%s %q", kafka.ResourceType(res.Type), res.Name)
+	})
+}
+
+// joinErrors returns every non-nil error in errs as a single error, or nil if
+// there are none. Each error is prefixed with describe(key) so the message
+// names the topic or resource it belongs to. Entries are sorted by that
+// description so the message is deterministic.
+func joinErrors[K comparable](errs map[K]error, describe func(K) string) error {
+	type failure struct {
+		name string
+		err  error
 	}
-	return nil
+	var failures []failure
+	for k, err := range errs {
+		if err != nil {
+			failures = append(failures, failure{name: describe(k), err: err})
+		}
+	}
+	slices.SortFunc(failures, func(a, b failure) int {
+		return cmp.Compare(a.name, b.name)
+	})
+	wrapped := make([]error, 0, len(failures))
+	for _, f := range failures {
+		wrapped = append(wrapped, fmt.Errorf("%s: %w", f.name, f.err))
+	}
+	return errors.Join(wrapped...)
 }
 
 // configEntries converts a Terraform map of strings into Kafka config entries.
@@ -488,7 +511,60 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 			return fmt.Errorf("errors changing replication factor: %s", partErrors)
 		}
 	}
+
+	// The reassignment is asynchronous. Wait for it to finish so that the
+	// next Read and the saved state reflect the cluster, not the plan.
+	waitCtx := ctx
+	timeout := r.client.GetConnector().KafkaClient.Timeout
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	err = waitForReassignment(waitCtx, reassignmentPollInterval, func(ctx context.Context) (bool, error) {
+		return r.replicaReassignmentDone(ctx, data.Name.ValueString(), int(data.ReplicationFactor.ValueInt64()))
+	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf(
+			"timed out after %s waiting for Kafka to finish reassigning replicas of topic %q to replication factor %d; "+
+				"the reassignment may still be in progress, so run terraform plan again to refresh the actual state: %w",
+			timeout, data.Name.ValueString(), data.ReplicationFactor.ValueInt64(), err,
+		)
+	}
+	if err != nil {
+		return fmt.Errorf("waiting for replica reassignment of topic %q: %w", data.Name.ValueString(), err)
+	}
 	return nil
+}
+
+// replicaReassignmentDone reports whether every partition of the topic has the
+// desired replica count and no partition reassignment is still in progress.
+func (r *topicResource) replicaReassignmentDone(ctx context.Context, topic string, replicationFactor int) (bool, error) {
+	topicInfo, err := r.client.GetTopic(ctx, topic, false)
+	if err != nil {
+		return false, err
+	}
+
+	partitionIDs := make([]int, 0, len(topicInfo.Partitions))
+	for _, partition := range topicInfo.Partitions {
+		if len(partition.Replicas) != replicationFactor {
+			return false, nil
+		}
+		partitionIDs = append(partitionIDs, partition.ID)
+	}
+
+	listResp, err := r.client.GetConnector().KafkaClient.ListPartitionReassignments(ctx, &kafka.ListPartitionReassignmentsRequest{
+		Topics: map[string]kafka.ListPartitionReassignmentsRequestTopic{
+			topic: {PartitionIndexes: partitionIDs},
+		},
+	})
+	if err != nil {
+		return false, err
+	}
+	if listResp.Error != nil {
+		return false, listResp.Error
+	}
+	return len(listResp.Topics[topic].Partitions) == 0, nil
 }
 
 // increaseReplicas returns a new replica list grown to the desired size using
@@ -591,16 +667,23 @@ func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))
 		return
 	}
-	for _, v := range clientResp.Errors {
-		if v != nil {
-			// A topic that is already gone is the desired end state
-			if errors.Is(v, kafka.UnknownTopicOrPartition) {
-				continue
-			}
-			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", v))
-			return
+	failures := make(map[string]error, len(clientResp.Errors))
+	for name, v := range clientResp.Errors {
+		// A topic that is already gone is the desired end state
+		if errors.Is(v, kafka.UnknownTopicOrPartition) {
+			continue
 		}
+		failures[name] = v
 	}
+	if err := joinErrors(failures, topicName); err != nil {
+		resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))
+		return
+	}
+}
+
+// topicName describes a topic key of a Kafka response for error messages.
+func topicName(name string) string {
+	return name
 }
 
 func (r *topicResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

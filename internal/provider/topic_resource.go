@@ -11,12 +11,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/mapplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/pecigonzalo/terraform-provider-kafka/internal/modifier"
 	kafka "github.com/segmentio/kafka-go"
 	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/segmentio/topicctl/pkg/apply/assigners"
@@ -89,17 +87,10 @@ func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				},
 			},
 			"configuration": schema.MapAttribute{
-				MarkdownDescription: "Configuration",
-				ElementType:         types.StringType,
-				Optional:            true,
-				Computed:            true,
-				PlanModifiers: []planmodifier.Map{
-					mapplanmodifier.UseStateForUnknown(),
-					modifier.MapDefaultValue(types.MapValueMust(
-						types.StringType,
-						map[string]attr.Value{},
-					)),
-				},
+				MarkdownDescription: "Topic configuration overrides. Only the keys set here are managed; " +
+					"any other topic configuration is left at the broker default.",
+				ElementType: types.StringType,
+				Optional:    true,
 			},
 		},
 	}
@@ -198,14 +189,18 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	data.Name = types.StringValue(topicInfo.Name)
 	data.Partitions = types.Int64Value(int64(len(topicInfo.Partitions)))
 	data.ReplicationFactor = types.Int64Value(int64(replicationFactor))
-	configElement := map[string]attr.Value{}
-	for k, v := range topicInfo.Config {
-		configElement[k] = types.StringValue(v)
+	// Brokers report every topic config, defaults included. Only track the keys
+	// the user manages, otherwise defaults would show up as perpetual drift.
+	// A null configuration stays null.
+	if !data.Config.IsNull() {
+		configElement := map[string]attr.Value{}
+		for k := range data.Config.Elements() {
+			if v, ok := topicInfo.Config[k]; ok {
+				configElement[k] = types.StringValue(v)
+			}
+		}
+		data.Config = types.MapValueMust(types.StringType, configElement)
 	}
-	data.Config = types.MapValueMust(
-		types.StringType,
-		configElement,
-	)
 
 	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)

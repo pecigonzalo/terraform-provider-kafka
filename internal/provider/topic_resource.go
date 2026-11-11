@@ -244,7 +244,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 
 	if !data.Config.Equal(state.Config) {
 		tflog.Info(ctx, "Updating topic configuration")
-		err := r.updateConfig(ctx, data, req, resp)
+		err := r.updateConfig(ctx, data)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic configuration, got error: %s", err))
 			return
@@ -252,7 +252,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	if !data.ReplicationFactor.Equal(state.ReplicationFactor) {
 		tflog.Info(ctx, "Updating topic replication factor")
-		err := r.updateReplicationFactor(ctx, state, data, req, resp)
+		err := r.updateReplicationFactor(ctx, data)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic replication factor, got error: %s", err))
 			return
@@ -260,7 +260,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	if !data.Partitions.Equal(state.Partitions) {
 		tflog.Info(ctx, "Updating topic partitions")
-		err := r.updatePartitions(ctx, state, data, req, resp)
+		err := r.updatePartitions(ctx, data)
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic partitions, got error: %s", err))
 			return
@@ -271,7 +271,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
+func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel) error {
 	// Generate KafkaConfig
 	configEntries := configEntries(data.Config)
 
@@ -328,7 +328,7 @@ func configEntriesToAlterConfigs(
 	return apiConfigs
 }
 
-func (r *topicResource) updateReplicationFactor(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
+func (r *topicResource) updateReplicationFactor(ctx context.Context, data *TopicResourceModel) error {
 	brokerIDs, err := r.client.GetBrokerIDs(ctx)
 	if err != nil {
 		return err
@@ -364,8 +364,16 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		}
 	}
 
+	// Use the live replica count, not state, which may be stale
+	replicasPresent64, err := replicaCount(topicInfo)
+	if err != nil {
+		return err
+	}
 	replicasWanted := data.ReplicationFactor.ValueInt64()
-	replicasPresent := state.ReplicationFactor.ValueInt64()
+	replicasPresent := int64(replicasPresent64)
+	if replicasWanted == replicasPresent {
+		return nil
+	}
 
 	var newPartitionsInfo []admin.PartitionInfo
 	for _, partition := range topicInfo.Partitions {
@@ -457,11 +465,7 @@ func reduceReplicas(desired int, replicas []int, leader int) []int {
 	return newReplicas
 }
 
-func (r *topicResource) updatePartitions(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {
-	if data.Partitions.ValueInt64() < state.Partitions.ValueInt64() {
-		return fmt.Errorf("partition count can't be reduced")
-	}
-
+func (r *topicResource) updatePartitions(ctx context.Context, data *TopicResourceModel) error {
 	brokerIDs, err := r.client.GetBrokerIDs(ctx)
 	if err != nil {
 		return err
@@ -475,12 +479,20 @@ func (r *topicResource) updatePartitions(ctx context.Context, state *TopicResour
 		return err
 	}
 
+	// Use the live partition count, not state, which may be stale
+	currentPartitions := len(topicInfo.Partitions)
+	if int(data.Partitions.ValueInt64()) < currentPartitions {
+		return fmt.Errorf("partition count can't be reduced from %d to %d", currentPartitions, data.Partitions.ValueInt64())
+	}
+	extraPartitions := int(data.Partitions.ValueInt64()) - currentPartitions
+	if extraPartitions == 0 {
+		return nil
+	}
+
 	currAssignments := topicInfo.ToAssignments()
 	for _, b := range brokersInfo {
 		tflog.Debug(ctx, fmt.Sprintf("Broker ID: %v Rack: %s", b.ID, b.Rack))
 	}
-	extraPartitions := int(data.Partitions.ValueInt64()) - int(state.Partitions.ValueInt64())
-
 	picker := pickers.NewRandomizedPicker()
 	extender := extenders.NewBalancedExtender(
 		brokersInfo,

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"testing"
 
@@ -145,4 +146,26 @@ func TestConfigEntries(t *testing.T) {
 	entries := configEntries(m)
 	assert.Equal(t, []kafka.ConfigEntry{{ConfigName: "retention.ms", ConfigValue: `say "hi"`}}, entries)
 	assert.Empty(t, configEntries(types.MapNull(types.StringType)))
+}
+
+func TestAccTopicResourcePartitions(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccTopicResourceConfig("partitions-topic", 1, 1),
+				Check:  resource.TestCheckResourceAttr("kafka_topic.test", "partitions", "1"),
+			},
+			{
+				Config: testAccTopicResourceConfig("partitions-topic", 3, 1),
+				Check:  resource.TestCheckResourceAttr("kafka_topic.test", "partitions", "3"),
+			},
+			// Shrinking is not supported by Kafka and must error
+			{
+				Config:      testAccTopicResourceConfig("partitions-topic", 2, 1),
+				ExpectError: regexp.MustCompile(`can't be\s+reduced`),
+			},
+		},
+	})
 }

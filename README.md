@@ -101,6 +101,10 @@ Terraform installed.
 make testacc
 ```
 
+Acceptance tests run against a three-broker KRaft cluster, so replication
+factor and partition changes are tested on real replicas. Every run starts its
+own containers on free ports, so runs can execute in parallel.
+
 ## FAQ
 
 > **Why not use [Mongey/terraform-provider-kafka](https://github.com/Mongey/terraform-provider-kafka)?**

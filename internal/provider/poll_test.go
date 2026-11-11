@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWaitForReassignment(t *testing.T) {
+func TestPollUntil(t *testing.T) {
 	errFetch := errors.New("metadata request failed")
 
 	tests := []struct {
@@ -83,7 +83,7 @@ func TestWaitForReassignment(t *testing.T) {
 			}
 
 			// Interval 0 keeps the tests fast: no real sleeping happens.
-			err := waitForReassignment(ctx, 0, fetch)
+			err := pollUntil(ctx, 0, fetch)
 
 			require.Equal(t, tc.wantCalls, calls, "number of polls")
 			if tc.wantErr == nil {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -13,21 +12,16 @@ import (
 	kafka "github.com/segmentio/kafka-go"
 )
 
-// clusterBrokerCount returns how many brokers the acceptance tests start, from
-// KAFKA_TEST_BROKERS. It defaults to 1.
-func clusterBrokerCount() int {
-	n, err := strconv.Atoi(os.Getenv("KAFKA_TEST_BROKERS"))
-	if err != nil || n < 1 {
-		return 1
-	}
-	return n
-}
+// clusterBrokers is the number of brokers the acceptance tests run against.
+// Three matches a real cluster and lets replication factor and partition
+// changes be tested on real replicas.
+const clusterBrokers = 3
 
-// runMultiBroker starts n Kafka brokers in KRaft mode on the test network, all
+// runCluster starts n Kafka brokers in KRaft mode on the test network, all
 // voting in one controller quorum. Each broker is reachable from the host on its
 // own port, and the brokers reach each other by container hostname. It exports
 // the host addresses as KAFKA_BOOTSTRAP_SERVERS and returns the exit code of m.
-func runMultiBroker(m *testing.M, pool *dockertest.Pool, networkID, suffix string, n int) int {
+func runCluster(m *testing.M, pool *dockertest.Pool, networkID, suffix string, n int) int {
 	const (
 		internalPort   = 19092
 		controllerPort = 29093

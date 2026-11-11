@@ -46,7 +46,7 @@ type SASLConfigModel struct {
 	Password  types.String `tfsdk:"password"`
 }
 
-// TLSConfigModel describes a SASL Authentication configuration
+// TLSConfigModel describes a TLS configuration
 type TLSConfigModel struct {
 	Enabled    types.Bool `tfsdk:"enabled"`
 	SkipVerify types.Bool `tfsdk:"skip_verify"`
@@ -61,9 +61,10 @@ func (p *kafkaProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"bootstrap_servers": schema.ListAttribute{
-				MarkdownDescription: "A list of Kafka brokers",
-				Required:            true,
-				ElementType:         types.StringType,
+				MarkdownDescription: "A list of Kafka brokers. Only the first entry is used to bootstrap the " +
+					"connection. Can also be set with the `KAFKA_BOOTSTRAP_SERVERS` environment variable (comma separated).",
+				Optional:    true,
+				ElementType: types.StringType,
 			},
 			"tls": schema.SingleNestedAttribute{
 				MarkdownDescription: "TLS Configuration",
@@ -88,7 +89,7 @@ func (p *kafkaProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 						Optional:            true,
 					},
 					"mechanism": schema.StringAttribute{
-						MarkdownDescription: "SASL mechanism to use. One of plain, scram-sha512, scram-sha256, aws-msk-iam (default: aws-msk-iam)",
+						MarkdownDescription: "SASL mechanism to use. One of plain, scram-sha256, scram-sha512, aws-msk-iam (default: aws-msk-iam)",
 						Optional:            true,
 					},
 					"username": schema.StringAttribute{
@@ -121,13 +122,16 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 
 	envVarPrefix := strings.ToUpper(p.typeName)
 
-	if len(config.BootstrapServers) >= 1 && config.BootstrapServers[0].IsUnknown() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("bootstrap_servers"),
-			"Unknown Kakfa bootstrap servers",
-			"The provider cannot create the Kafka client as there is an unknown configuration value. "+
-				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_BOOTSTRAP_SERVERS environment variable.", envVarPrefix),
-		)
+	for _, server := range config.BootstrapServers {
+		if server.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("bootstrap_servers"),
+				"Unknown Kafka bootstrap servers",
+				"The provider cannot create the Kafka client as there is an unknown configuration value. "+
+					fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_BOOTSTRAP_SERVERS environment variable.", envVarPrefix),
+			)
+			break
+		}
 	}
 
 	if config.SASL.Username.IsUnknown() {
@@ -135,7 +139,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 			path.Root("sasl.username"),
 			"Unknown Kafka SASL username",
 			"The provider cannot create the Kafka client as there is an unknown configuration value for the SASL username. "+
-				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_SASL_USERNAMAE environment variable.", envVarPrefix),
+				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_SASL_USERNAME environment variable.", envVarPrefix),
 		)
 	}
 	if config.SASL.Password.IsUnknown() {
@@ -154,15 +158,12 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	var brokerConfig admin.BrokerAdminClientConfig
 
 	// Bootstrap servers
-	bootstrapServersString := p.getEnv("BOOTSTRAP_SERVERS", "localhost:9092")
-	boostrapServers := strings.Split(bootstrapServersString, ",")
-	boostrapServer := boostrapServers[0] // Select the first server on the list
-	if len(config.BootstrapServers) > 0 {
-		boostrapServer = config.BootstrapServers[0].ValueString()
+	bootstrapServer, err := p.bootstrapServer(config.BootstrapServers)
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("bootstrap_servers"), "Missing Kafka bootstrap servers", err.Error())
+		return
 	}
-	// We only require 1 server
-	brokerConfig.BrokerAddr = boostrapServer
-	tflog.SetField(ctx, "kafka_bootstrap_server", boostrapServer)
+	brokerConfig.BrokerAddr = bootstrapServer
 
 	// SASL configuration
 	saslConfigEnabled := p.getEnvBool("SASL_ENABLED", true)
@@ -170,7 +171,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		saslConfigEnabled = config.SASL.Enabled.ValueBool()
 	}
 	if saslConfigEnabled {
-		saslConfig, err := p.generateSASLConfig(ctx, config.SASL, resp)
+		saslConfig, err := p.generateSASLConfig(config.SASL)
 		if err != nil {
 			resp.Diagnostics.AddError("Unable to create Kafka client", err.Error())
 			return
@@ -179,7 +180,11 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 
 	// Configure TLS settings
-	brokerConfig.TLS.Enabled = config.TLS.Enabled.ValueBool()
+	// TLS is enabled unless explicitly disabled, as documented in the schema
+	brokerConfig.TLS.Enabled = true
+	if !config.TLS.Enabled.IsNull() {
+		brokerConfig.TLS.Enabled = config.TLS.Enabled.ValueBool()
+	}
 	brokerConfig.TLS.SkipVerify = config.TLS.SkipVerify.ValueBool()
 
 	// Configure timeout
@@ -220,42 +225,66 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	tflog.Info(ctx, "Configured Kafka client", map[string]any{"success": true})
 }
 
-// generateSASLConfig returns a SASLConfig{} or an error given a SASLModel
-func (p *kafkaProvider) generateSASLConfig(ctx context.Context, sasl SASLConfigModel, resp *provider.ConfigureResponse) (admin.SASLConfig, error) {
+// bootstrapServer returns the broker address used to bootstrap the client.
+// Configured values take precedence over the environment. Only one server is
+// required, so the first entry is used.
+func (p *kafkaProvider) bootstrapServer(configured []types.String) (string, error) {
+	if len(configured) > 0 {
+		if server := configured[0].ValueString(); server != "" {
+			return server, nil
+		}
+	}
+	for _, server := range strings.Split(p.getEnv("BOOTSTRAP_SERVERS", ""), ",") {
+		if server = strings.TrimSpace(server); server != "" {
+			return server, nil
+		}
+	}
+	return "", fmt.Errorf("set bootstrap_servers or the %s_BOOTSTRAP_SERVERS environment variable", strings.ToUpper(p.typeName))
+}
 
-	saslMechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
+// generateSASLConfig returns a SASLConfig{} or an error given a SASLModel.
+// Values set in the configuration take precedence over environment variables.
+func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (admin.SASLConfig, error) {
+	mechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
 	if !sasl.Mechanism.IsNull() {
-		saslMechanism = sasl.Mechanism.ValueString()
+		mechanism = sasl.Mechanism.ValueString()
 	}
-	saslUsername := p.getEnv("SASL_USERNAME", "")
-	if !sasl.Mechanism.IsNull() {
-		saslUsername = sasl.Username.ValueString()
+	username := p.getEnv("SASL_USERNAME", "")
+	if !sasl.Username.IsNull() {
+		username = sasl.Username.ValueString()
 	}
-	saslPassword := p.getEnv("SASL_PASSWORD", "")
-	if !sasl.Mechanism.IsNull() {
-		saslPassword = sasl.Password.ValueString()
+	password := p.getEnv("SASL_PASSWORD", "")
+	if !sasl.Password.IsNull() {
+		password = sasl.Password.ValueString()
 	}
 
-	switch admin.SASLMechanism(saslMechanism) {
-	case admin.SASLMechanismScramSHA512:
-	case admin.SASLMechanismScramSHA256:
-	case admin.SASLMechanismPlain:
-		tflog.SetField(ctx, "kafka_sasl_username", saslUsername)
-		tflog.SetField(ctx, "kafka_sasl_password", saslPassword)
-		tflog.MaskFieldValuesWithFieldKeys(ctx, "kafka_sasl_password")
-		return admin.SASLConfig{
-			Enabled:   true,
-			Mechanism: admin.SASLMechanismScramSHA256,
-			Username:  saslUsername,
-			Password:  saslPassword,
-		}, nil
-	case admin.SASLMechanismAWSMSKIAM:
+	// Accept both "scram-sha256" and "scram-sha-256" style names.
+	normalized := strings.ToLower(strings.TrimSpace(mechanism))
+	normalized = strings.ReplaceAll(normalized, "scram-sha-", "scram-sha")
+
+	var saslMechanism admin.SASLMechanism
+	switch normalized {
+	case "plain":
+		saslMechanism = admin.SASLMechanismPlain
+	case "scram-sha256":
+		saslMechanism = admin.SASLMechanismScramSHA256
+	case "scram-sha512":
+		saslMechanism = admin.SASLMechanismScramSHA512
+	case "aws-msk-iam":
 		return admin.SASLConfig{
 			Enabled:   true,
 			Mechanism: admin.SASLMechanismAWSMSKIAM,
 		}, nil
+	default:
+		return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %q", mechanism)
 	}
-	return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %s", sasl.Mechanism.ValueString())
+
+	return admin.SASLConfig{
+		Enabled:   true,
+		Mechanism: saslMechanism,
+		Username:  username,
+		Password:  password,
+	}, nil
 }
 
 func (p *kafkaProvider) Resources(ctx context.Context) []func() resource.Resource {

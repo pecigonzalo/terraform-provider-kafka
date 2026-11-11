@@ -27,8 +27,8 @@ data "kafka_topic" "example" {
 
 ### Read-Only
 
-- `configuration` (Map of String) Configuration version
-- `id` (String) The ID of this resource.
+- `configuration` (Map of String) Topic configuration, including broker defaults
+- `id` (String) Topic id, the same as the topic name
 - `partitions` (Number) Topic partitions count
 - `replication_factor` (Number) Topic replication factor
 - `version` (Number) Topic version

@@ -8,11 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/segmentio/topicctl/pkg/admin"
@@ -107,6 +109,7 @@ func (p *kafkaProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 			"timeout": schema.Int64Attribute{
 				MarkdownDescription: "Timeout for provider operations in seconds (default: 300)",
 				Optional:            true,
+				Validators:          []validator.Int64{int64validator.AtLeast(1)},
 			},
 		},
 	}

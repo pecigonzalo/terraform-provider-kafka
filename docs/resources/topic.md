@@ -34,7 +34,7 @@ resource "kafka_topic" "example" {
 
 ### Optional
 
-- `configuration` (Map of String) Configuration
+- `configuration` (Map of String) Topic configuration overrides. Only the keys set here are managed; any other topic configuration is left at the broker default.
 
 ### Read-Only
 

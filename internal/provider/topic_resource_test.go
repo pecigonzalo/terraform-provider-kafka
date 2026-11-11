@@ -169,3 +169,67 @@ func TestAccTopicResourcePartitions(t *testing.T) {
 		},
 	})
 }
+
+func TestAccTopicResourceConfiguration(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Set a key; the harness fails if a follow-up plan is non-empty
+			{
+				Config: testAccTopicResourceConfigWithRetention("config-topic", `"60000"`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("kafka_topic.test", "configuration.%", "1"),
+					resource.TestCheckResourceAttr("kafka_topic.test", "configuration.retention.ms", "60000"),
+				),
+			},
+			// Change the value
+			{
+				Config: testAccTopicResourceConfigWithRetention("config-topic", `"120000"`),
+				Check:  resource.TestCheckResourceAttr("kafka_topic.test", "configuration.retention.ms", "120000"),
+			},
+			// Import tracks no configuration unless it is configured
+			{
+				ResourceName:            "kafka_topic.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"configuration"},
+			},
+			// Remove the block entirely
+			{
+				Config: testAccTopicResourceConfig("config-topic", 1, 1),
+				Check:  resource.TestCheckNoResourceAttr("kafka_topic.test", "configuration.retention.ms"),
+			},
+		},
+	})
+}
+
+func testAccTopicResourceConfigWithRetention(name string, retention string) string {
+	return fmt.Sprintf(providerConfig+`
+resource "kafka_topic" "test" {
+  name               = %[1]q
+  partitions         = 1
+  replication_factor = 1
+  configuration = {
+    "retention.ms" = %[2]s
+  }
+}
+`, name, retention)
+}
+
+func TestAccTopicResourceInvalid(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config:      testAccTopicResourceConfig("invalid", 0, 1),
+				ExpectError: regexp.MustCompile(`(?s)partitions.*at least 1`),
+			},
+			{
+				Config:      testAccTopicResourceConfig("invalid", 1, 0),
+				ExpectError: regexp.MustCompile(`(?s)replication_factor.*at least 1`),
+			},
+		},
+	})
+}

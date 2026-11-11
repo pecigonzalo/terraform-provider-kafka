@@ -81,3 +81,25 @@ func TestGenerateSASLConfig(t *testing.T) {
 		assert.Equal(t, "cfguser", cfg.Username)
 	})
 }
+
+func TestBootstrapServer(t *testing.T) {
+	p := &kafkaProvider{typeName: "kafka"}
+
+	t.Run("config_first_entry_wins", func(t *testing.T) {
+		t.Setenv("KAFKA_BOOTSTRAP_SERVERS", "env:9092")
+		got, err := p.bootstrapServer([]types.String{types.StringValue("a:9092"), types.StringValue("b:9092")})
+		assert.NoError(t, err)
+		assert.Equal(t, "a:9092", got)
+	})
+	t.Run("falls_back_to_env", func(t *testing.T) {
+		t.Setenv("KAFKA_BOOTSTRAP_SERVERS", " env1:9092 , env2:9092")
+		got, err := p.bootstrapServer(nil)
+		assert.NoError(t, err)
+		assert.Equal(t, "env1:9092", got)
+	})
+	t.Run("errors_when_unset", func(t *testing.T) {
+		t.Setenv("KAFKA_BOOTSTRAP_SERVERS", "")
+		_, err := p.bootstrapServer(nil)
+		assert.Error(t, err)
+	})
+}

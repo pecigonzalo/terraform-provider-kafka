@@ -61,9 +61,10 @@ func (p *kafkaProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"bootstrap_servers": schema.ListAttribute{
-				MarkdownDescription: "A list of Kafka brokers",
-				Required:            true,
-				ElementType:         types.StringType,
+				MarkdownDescription: "A list of Kafka brokers. Only the first entry is used to bootstrap the " +
+					"connection. Can also be set with the `KAFKA_BOOTSTRAP_SERVERS` environment variable (comma separated).",
+				Optional:    true,
+				ElementType: types.StringType,
 			},
 			"tls": schema.SingleNestedAttribute{
 				MarkdownDescription: "TLS Configuration",
@@ -121,13 +122,16 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 
 	envVarPrefix := strings.ToUpper(p.typeName)
 
-	if len(config.BootstrapServers) >= 1 && config.BootstrapServers[0].IsUnknown() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("bootstrap_servers"),
-			"Unknown Kafka bootstrap servers",
-			"The provider cannot create the Kafka client as there is an unknown configuration value. "+
-				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_BOOTSTRAP_SERVERS environment variable.", envVarPrefix),
-		)
+	for _, server := range config.BootstrapServers {
+		if server.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("bootstrap_servers"),
+				"Unknown Kafka bootstrap servers",
+				"The provider cannot create the Kafka client as there is an unknown configuration value. "+
+					fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_BOOTSTRAP_SERVERS environment variable.", envVarPrefix),
+			)
+			break
+		}
 	}
 
 	if config.SASL.Username.IsUnknown() {
@@ -154,15 +158,12 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	var brokerConfig admin.BrokerAdminClientConfig
 
 	// Bootstrap servers
-	bootstrapServersString := p.getEnv("BOOTSTRAP_SERVERS", "localhost:9092")
-	boostrapServers := strings.Split(bootstrapServersString, ",")
-	boostrapServer := boostrapServers[0] // Select the first server on the list
-	if len(config.BootstrapServers) > 0 {
-		boostrapServer = config.BootstrapServers[0].ValueString()
+	bootstrapServer, err := p.bootstrapServer(config.BootstrapServers)
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("bootstrap_servers"), "Missing Kafka bootstrap servers", err.Error())
+		return
 	}
-	// We only require 1 server
-	brokerConfig.BrokerAddr = boostrapServer
-	tflog.SetField(ctx, "kafka_bootstrap_server", boostrapServer)
+	brokerConfig.BrokerAddr = bootstrapServer
 
 	// SASL configuration
 	saslConfigEnabled := p.getEnvBool("SASL_ENABLED", true)
@@ -222,6 +223,23 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	resourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
 	resp.ResourceData = resourceClient
 	tflog.Info(ctx, "Configured Kafka client", map[string]any{"success": true})
+}
+
+// bootstrapServer returns the broker address used to bootstrap the client.
+// Configured values take precedence over the environment. Only one server is
+// required, so the first entry is used.
+func (p *kafkaProvider) bootstrapServer(configured []types.String) (string, error) {
+	if len(configured) > 0 {
+		if server := configured[0].ValueString(); server != "" {
+			return server, nil
+		}
+	}
+	for _, server := range strings.Split(p.getEnv("BOOTSTRAP_SERVERS", ""), ",") {
+		if server = strings.TrimSpace(server); server != "" {
+			return server, nil
+		}
+	}
+	return "", fmt.Errorf("set bootstrap_servers or the %s_BOOTSTRAP_SERVERS environment variable", strings.ToUpper(p.typeName))
 }
 
 // generateSASLConfig returns a SASLConfig{} or an error given a SASLModel.

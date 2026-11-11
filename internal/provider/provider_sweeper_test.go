@@ -1,7 +1,11 @@
 package provider
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log"
+	"net"
 	"os"
 	"testing"
 
@@ -12,36 +16,70 @@ import (
 
 const (
 	existingTopic = "read.me"
+
+	// orphanExpirySeconds makes Docker kill the test container even if the test
+	// process dies before it can clean up.
+	orphanExpirySeconds = 600
 )
 
-// Configure mock Kafka cluster and teardown
-func TestMain(t *testing.M) {
+// TestMain starts an isolated Kafka cluster for acceptance tests and tears it
+// down afterwards. Every run uses its own network, container name and host
+// port, so concurrent runs (for example from parallel sessions or CI jobs on a
+// shared Docker host) do not collide, and a leftover from a crashed run never
+// blocks the next one.
+func TestMain(m *testing.M) {
+	os.Exit(run(m))
+}
+
+func run(m *testing.M) int {
 	// Skip docker setup if not running acceptance
 	if os.Getenv("TF_ACC") == "" {
-		code := t.Run()
-		os.Exit(code)
+		return m.Run()
 	}
 
 	pool, err := dockertest.NewPool("")
 	if err != nil {
-		log.Fatalf("Could not connect to docker: %s", err)
+		log.Printf("Could not connect to docker: %s", err)
+		return 1
 	}
 
-	network, err := pool.CreateNetwork("terraform-provider-kafka")
+	suffix, err := randomSuffix()
 	if err != nil {
-		log.Fatalf("Could not start network: %s", err)
+		log.Printf("Could not generate run id: %s", err)
+		return 1
 	}
 
+	port, err := freePort()
+	if err != nil {
+		log.Printf("Could not find a free port: %s", err)
+		return 1
+	}
+
+	network, err := pool.CreateNetwork("terraform-provider-kafka-" + suffix)
+	if err != nil {
+		log.Printf("Could not start network: %s", err)
+		return 1
+	}
+	defer func() {
+		if err := pool.RemoveNetwork(network); err != nil {
+			log.Printf("Could not purge network: %s", err)
+		}
+	}()
+
+	hostPort := fmt.Sprint(port)
 	kafkaContainer, err := pool.RunWithOptions(&dockertest.RunOptions{
+		Name:       "terraform-provider-kafka-" + suffix,
 		Repository: "docker.io/apache/kafka",
 		Tag:        "3.9.1",
 		Env: []string{
 			"KAFKA_NODE_ID=1",
 			"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT",
-			"KAFKA_ADVERTISED_LISTENERS=PLAINTEXT_HOST://localhost:9092,PLAINTEXT://kafka:19092",
+			// The host listener uses the same port inside and outside the
+			// container so the advertised address works from the host.
+			"KAFKA_ADVERTISED_LISTENERS=PLAINTEXT_HOST://localhost:" + hostPort + ",PLAINTEXT://kafka:19092",
 			"KAFKA_PROCESS_ROLES=broker,controller",
 			"KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:29093",
-			"KAFKA_LISTENERS=CONTROLLER://:29093,PLAINTEXT_HOST://:9092,PLAINTEXT://:19092",
+			"KAFKA_LISTENERS=CONTROLLER://:29093,PLAINTEXT_HOST://:" + hostPort + ",PLAINTEXT://:19092",
 			"KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT",
 			"KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",
 			"CLUSTER_ID=4L6g3nShT-eMCtK--X86sw",
@@ -51,63 +89,74 @@ func TestMain(t *testing.M) {
 			"KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1",
 			"KAFKA_LOG_DIRS=/tmp/kraft-combined-logs",
 		},
-		Hostname:  "kafka",
-		NetworkID: network.Network.ID,
+		Hostname:     "kafka",
+		NetworkID:    network.Network.ID,
+		ExposedPorts: []string{hostPort + "/tcp"},
 		PortBindings: map[docker.Port][]docker.PortBinding{
-			"9092/tcp": {{HostIP: "127.0.0.1", HostPort: "9092/tcp"}},
+			docker.Port(hostPort + "/tcp"): {{HostIP: "127.0.0.1", HostPort: hostPort}},
 		},
 	})
 	if err != nil {
-		log.Fatalf("Could not start resource: %s", err)
+		log.Printf("Could not start resource: %s", err)
+		return 1
+	}
+	defer func() {
+		if err := pool.Purge(kafkaContainer); err != nil {
+			log.Printf("Could not purge resource: %s", err)
+		}
+	}()
+	if err := kafkaContainer.Expire(orphanExpirySeconds); err != nil {
+		log.Printf("Could not set container expiry: %s", err)
 	}
 
+	address := "127.0.0.1:" + hostPort
 	waitForKafka := func() error {
-		conn, err := kafka.Dial("tcp", "localhost:9092")
+		conn, err := kafka.Dial("tcp", address)
 		if err != nil {
-			// Best-effort diagnostics; the dial error is what gets returned.
-			_ = pool.Client.Logs(docker.LogsOptions{
-				Container:   kafkaContainer.Container.ID,
-				RawTerminal: true,
-			})
 			return err
 		}
-		defer func() {
-			// Closing a probe connection; nothing useful to do on failure.
-			_ = conn.Close()
-		}()
+		defer func() { _ = conn.Close() }()
 
-		_, err = conn.ApiVersions()
-		if err != nil {
+		if _, err = conn.ApiVersions(); err != nil {
 			return err
 		}
 
 		// Bootstrap test topic
-		topic := kafka.TopicConfig{
+		return conn.CreateTopics(kafka.TopicConfig{
 			Topic:             existingTopic,
 			NumPartitions:     1,
 			ReplicationFactor: 1,
-		}
-		err = conn.CreateTopics(topic)
-		if err != nil {
-			return err
-		}
-
-		return nil
+		})
+	}
+	if err := pool.Retry(waitForKafka); err != nil {
+		log.Printf("could not connect to kafka: %s", err)
+		return 1
 	}
 
-	if err = pool.Retry(waitForKafka); err != nil {
-		log.Fatalf("could not connect to kafka: %s", err)
+	// The provider reads its bootstrap server from the environment in tests.
+	if err := os.Setenv("KAFKA_BOOTSTRAP_SERVERS", address); err != nil {
+		log.Printf("Could not set bootstrap servers: %s", err)
+		return 1
 	}
 
-	code := t.Run()
+	return m.Run()
+}
 
-	// You can't defer this because os.Exit doesn't care for defer
-	if err := pool.Purge(kafkaContainer); err != nil {
-		log.Fatalf("Could not purge resource: %s", err)
+// randomSuffix returns a short random identifier for per-run resource names.
+func randomSuffix() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
-	if err := pool.RemoveNetwork(network); err != nil {
-		log.Fatalf("Could not purge network: %s", err)
-	}
+	return hex.EncodeToString(b), nil
+}
 
-	os.Exit(code)
+// freePort asks the OS for an unused TCP port on the loopback interface.
+func freePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = l.Close() }()
+	return l.Addr().(*net.TCPAddr).Port, nil
 }

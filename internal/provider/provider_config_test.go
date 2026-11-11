@@ -6,6 +6,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateSASLConfig(t *testing.T) {
@@ -102,4 +103,67 @@ func TestBootstrapServer(t *testing.T) {
 		_, err := p.bootstrapServer(nil)
 		assert.Error(t, err)
 	})
+}
+
+func TestGetEnvInt(t *testing.T) {
+	p := &kafkaProvider{typeName: "kafka"}
+
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{name: "empty_uses_fallback", value: "", want: 300},
+		{name: "valid_integer", value: "42", want: 42},
+		{name: "negative_integer", value: "-1", want: -1},
+		{name: "malformed_errors", value: "abc", wantErr: true},
+		{name: "float_errors", value: "1.5", wantErr: true},
+		{name: "whitespace_errors", value: " 10", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("KAFKA_TIMEOUT", tc.value)
+			got, err := p.getEnvInt("TIMEOUT", 300)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "KAFKA_TIMEOUT")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestGetEnvBool(t *testing.T) {
+	p := &kafkaProvider{typeName: "kafka"}
+
+	tests := []struct {
+		name    string
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		{name: "empty_uses_fallback", value: "", want: true},
+		{name: "true", value: "true", want: true},
+		{name: "false", value: "false", want: false},
+		{name: "numeric_one", value: "1", want: true},
+		{name: "numeric_zero", value: "0", want: false},
+		{name: "typo_errors", value: "flase", wantErr: true},
+		{name: "yes_errors", value: "yes", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("KAFKA_SASL_ENABLED", tc.value)
+			got, err := p.getEnvBool("SASL_ENABLED", true)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "KAFKA_SASL_ENABLED")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

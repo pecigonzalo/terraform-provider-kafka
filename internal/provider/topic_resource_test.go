@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -10,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 	kafka "github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAccTopicResource(t *testing.T) {
@@ -88,46 +90,51 @@ resource "kafka_topic" "test" {
 }
 
 func TestIncreaseReplicas(t *testing.T) {
-	assert := assert.New(t)
-	desiredCount := 3
-	currentReplicas := []int{2, 1}
-	brokerIDs := []int{1, 2, 3}
-
-	expectedReplicas := []int{2, 1, 3}
-	newReplicas := increaseReplicas(desiredCount, currentReplicas, brokerIDs)
-
-	assert.EqualValues(expectedReplicas, newReplicas, "Increase replica expected should be the same")
+	tests := []struct {
+		name     string
+		desired  int
+		replicas []int
+		brokers  []int
+		want     []int
+	}{
+		{"adds_missing_broker", 3, []int{2, 1}, []int{1, 2, 3}, []int{2, 1, 3}},
+		{"no_change_when_at_desired", 2, []int{2, 1}, []int{1, 2, 3}, []int{2, 1}},
+		{"limited_by_available_brokers", 5, []int{1}, []int{1, 2}, []int{1, 2}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := slices.Clone(tc.replicas)
+			got := increaseReplicas(tc.desired, input, tc.brokers)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.replicas, input, "input must not be modified")
+		})
+	}
 }
 
 func TestReduceReplicas(t *testing.T) {
-	assert := assert.New(t)
-
-	desiredCount := 1
-	currentReplicas := []int{2, 1, 3}
-	leader := 2
-
-	expectedReplicas := []int{2}
-	newReplicas := reduceReplicas(desiredCount, currentReplicas, leader)
-
-	assert.Equal(expectedReplicas, newReplicas, "Increase replica expected should be the same")
-
-	desiredCount = 2
-	currentReplicas = []int{2, 1, 3}
-	leader = 2
-
-	expectedReplicas = []int{2, 3}
-	newReplicas = reduceReplicas(desiredCount, currentReplicas, leader)
-
-	assert.Equal(expectedReplicas, newReplicas, "Increase replica expected should be the same")
-
-	desiredCount = 2
-	currentReplicas = []int{2, 1, 3, 5, 4}
-	leader = 2
-
-	expectedReplicas = []int{2, 4}
-	newReplicas = reduceReplicas(desiredCount, currentReplicas, leader)
-
-	assert.Equal(expectedReplicas, newReplicas, "Increase replica expected should be the same")
+	tests := []struct {
+		name     string
+		desired  int
+		replicas []int
+		leader   int
+		want     []int
+	}{
+		{"keeps_leader_first", 1, []int{2, 1, 3}, 2, []int{2}},
+		{"keeps_leader_last", 1, []int{1, 3, 2}, 2, []int{2}},
+		{"drops_from_end", 2, []int{2, 1, 3}, 2, []int{2, 1}},
+		{"larger_set", 2, []int{2, 1, 3, 5, 4}, 2, []int{2, 1}},
+		{"leader_in_middle", 2, []int{1, 2, 3, 4}, 2, []int{1, 2}},
+		{"unknown_leader", 2, []int{1, 2, 3}, -1, []int{1, 2}},
+		{"no_change_when_at_desired", 3, []int{1, 2, 3}, 1, []int{1, 2, 3}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := slices.Clone(tc.replicas)
+			got := reduceReplicas(tc.desired, input, tc.leader)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.replicas, input, "input must not be modified")
+		})
+	}
 }
 
 func TestConfigEntries(t *testing.T) {

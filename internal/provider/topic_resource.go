@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -427,42 +428,33 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, state *Topi
 	return nil
 }
 
-func containsId(id int, ids []int) bool {
-	for _, v := range ids {
-		if v == id {
-			return true
-		}
-	}
-	return false
-}
-
+// increaseReplicas returns a new replica list grown to the desired size using
+// brokers not already hosting a replica. The input slice is not modified.
 func increaseReplicas(desired int, replicas []int, brokerIDs []int) []int {
-	newReplicas := replicas
+	newReplicas := slices.Clone(replicas)
 	for _, id := range brokerIDs {
-		if !containsId(id, newReplicas) {
-			newReplicas = append(newReplicas, id)
+		if len(newReplicas) >= desired {
+			break
 		}
-		if len(newReplicas) == desired {
-			return newReplicas
+		if !slices.Contains(newReplicas, id) {
+			newReplicas = append(newReplicas, id)
 		}
 	}
 	return newReplicas
 }
 
+// reduceReplicas returns a new replica list shrunk to the desired size. The
+// leader is always kept; other replicas are dropped from the end of the list.
+// The input slice is not modified.
 func reduceReplicas(desired int, replicas []int, leader int) []int {
-	if len(replicas) > desired {
-		newReplicas := []int{}
-		for i, replica := range replicas {
-			if replica == leader {
-				continue
-			} else {
-				newReplicas = append(replicas[:i], replicas[i+1:]...)
-			}
+	newReplicas := slices.Clone(replicas)
+	for i := len(newReplicas) - 1; i >= 0 && len(newReplicas) > desired; i-- {
+		if newReplicas[i] == leader {
+			continue
 		}
-		return reduceReplicas(desired, newReplicas, leader)
-	} else {
-		return replicas
+		newReplicas = slices.Delete(newReplicas, i, i+1)
 	}
+	return newReplicas
 }
 
 func (r *topicResource) updatePartitions(ctx context.Context, state *TopicResourceModel, data *TopicResourceModel, req resource.UpdateRequest, resp *resource.UpdateResponse) error {

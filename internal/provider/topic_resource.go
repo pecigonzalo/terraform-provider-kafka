@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -114,7 +115,7 @@ func (r *topicResource) Configure(_ context.Context, req resource.ConfigureReque
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *http.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *admin.BrokerAdminClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
 		return
@@ -410,7 +411,7 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, state *Topi
 		return err
 	}
 	if clientResp.Error != nil {
-		return err
+		return clientResp.Error
 	}
 	if len(clientResp.PartitionResults) > 0 {
 		partErrors := []error{}
@@ -533,8 +534,11 @@ func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	}
 	for _, v := range clientResp.Errors {
 		if v != nil {
-			kafkaError := v.(kafka.Error)
-			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", kafkaError.Error()))
+			// A topic that is already gone is the desired end state
+			if errors.Is(v, kafka.UnknownTopicOrPartition) {
+				continue
+			}
+			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", v))
 			return
 		}
 	}

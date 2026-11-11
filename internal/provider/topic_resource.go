@@ -404,6 +404,9 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 	alterPartitionReassignmentsRequest := kafka.AlterPartitionReassignmentsRequest{
 		Topic:       data.Name.ValueString(),
 		Assignments: apiAssignments,
+		// Without a timeout the broker gets timeoutMs=0 and fails the request
+		// with REQUEST_TIMED_OUT before the reassignment is accepted.
+		Timeout: r.client.GetConnector().KafkaClient.Timeout,
 	}
 
 	tflog.Info(ctx, fmt.Sprintf("%v", alterPartitionReassignmentsRequest.Assignments))

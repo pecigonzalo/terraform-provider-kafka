@@ -169,7 +169,11 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	brokerConfig.BrokerAddr = bootstrapServer
 
 	// SASL configuration
-	saslConfigEnabled := p.getEnvBool("SASL_ENABLED", true)
+	saslConfigEnabled, err := p.getEnvBool("SASL_ENABLED", true)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid Kafka provider environment variable", err.Error())
+		return
+	}
 	if !config.SASL.Enabled.IsNull() {
 		saslConfigEnabled = config.SASL.Enabled.ValueBool()
 	}
@@ -191,7 +195,12 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	brokerConfig.TLS.SkipVerify = config.TLS.SkipVerify.ValueBool()
 
 	// Configure timeout
-	defaultTimeout := int64(p.getEnvInt("TIMEOUT", 300))
+	envTimeout, err := p.getEnvInt("TIMEOUT", 300)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid Kafka provider environment variable", err.Error())
+		return
+	}
+	defaultTimeout := int64(envTimeout)
 	if !config.Timeout.IsNull() {
 		defaultTimeout = config.Timeout.ValueInt64()
 	}
@@ -311,36 +320,46 @@ func New(version string) func() provider.Provider {
 	}
 }
 
+// envVarName returns the full environment variable name for key.
+func (p *kafkaProvider) envVarName(key string) string {
+	return fmt.Sprintf("%s_%s", strings.ToUpper(p.typeName), key)
+}
+
 func (p *kafkaProvider) getEnv(key, fallback string) string {
-	envVarPrefix := fmt.Sprintf("%s_", strings.ToUpper(p.typeName))
-	if value, ok := os.LookupEnv(envVarPrefix + key); ok {
+	if value, ok := os.LookupEnv(p.envVarName(key)); ok {
 		return value
 	}
 	return fallback
 }
 
-func (p *kafkaProvider) getEnvInt(key string, fallback int) int {
+// getEnvInt returns the integer value of an environment variable. An unset or
+// empty variable yields fallback. A non-empty value that is not an integer
+// yields an error naming the variable.
+func (p *kafkaProvider) getEnvInt(key string, fallback int) (int, error) {
 	envVar := p.getEnv(key, "")
 	if envVar == "" {
-		return fallback
+		return fallback, nil
 	}
 
 	result, err := strconv.Atoi(envVar)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("%s must be an integer, got %q", p.envVarName(key), envVar)
 	}
-	return result
+	return result, nil
 }
 
-func (p *kafkaProvider) getEnvBool(key string, fallback bool) bool {
+// getEnvBool returns the boolean value of an environment variable. An unset or
+// empty variable yields fallback. A non-empty value that is not a boolean
+// yields an error naming the variable.
+func (p *kafkaProvider) getEnvBool(key string, fallback bool) (bool, error) {
 	envVar := p.getEnv(key, "")
 	if envVar == "" {
-		return fallback
+		return fallback, nil
 	}
 
 	result, err := strconv.ParseBool(envVar)
 	if err != nil {
-		return fallback
+		return false, fmt.Errorf("%s must be a boolean (true/false), got %q", p.envVarName(key), envVar)
 	}
-	return result
+	return result, nil
 }

@@ -66,6 +66,10 @@ func run(m *testing.M) int {
 		}
 	}()
 
+	if brokers := clusterBrokerCount(); brokers > 1 {
+		return runMultiBroker(m, pool, network.Network.ID, suffix, brokers)
+	}
+
 	hostPort := fmt.Sprint(port)
 	kafkaContainer, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Name:       "terraform-provider-kafka-" + suffix,

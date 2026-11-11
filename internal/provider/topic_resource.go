@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -143,11 +144,9 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
 		return
 	}
-	for _, v := range clientResp.Errors {
-		if v != nil {
-			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to create topic, got error: %s", v))
-			return
-		}
+	if err := joinErrors(clientResp.Errors, topicName); err != nil {
+		resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
+		return
 	}
 	data.ID = data.Name
 	tflog.Trace(ctx, "Created topic")
@@ -280,10 +279,34 @@ func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceMod
 	if err != nil {
 		return err
 	}
-	for _, v := range clientResp.Errors {
-		return v
+	return joinErrors(clientResp.Errors, func(res kafka.AlterConfigsResponseResource) string {
+		return fmt.Sprintf("%s %q", kafka.ResourceType(res.Type), res.Name)
+	})
+}
+
+// joinErrors returns every non-nil error in errs as a single error, or nil if
+// there are none. Each error is prefixed with describe(key) so the message
+// names the topic or resource it belongs to. Entries are sorted by that
+// description so the message is deterministic.
+func joinErrors[K comparable](errs map[K]error, describe func(K) string) error {
+	type failure struct {
+		name string
+		err  error
 	}
-	return nil
+	var failures []failure
+	for k, err := range errs {
+		if err != nil {
+			failures = append(failures, failure{name: describe(k), err: err})
+		}
+	}
+	slices.SortFunc(failures, func(a, b failure) int {
+		return cmp.Compare(a.name, b.name)
+	})
+	wrapped := make([]error, 0, len(failures))
+	for _, f := range failures {
+		wrapped = append(wrapped, fmt.Errorf("%s: %w", f.name, f.err))
+	}
+	return errors.Join(wrapped...)
 }
 
 // configEntries converts a Terraform map of strings into Kafka config entries.
@@ -527,16 +550,23 @@ func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))
 		return
 	}
-	for _, v := range clientResp.Errors {
-		if v != nil {
-			// A topic that is already gone is the desired end state
-			if errors.Is(v, kafka.UnknownTopicOrPartition) {
-				continue
-			}
-			resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", v))
-			return
+	failures := make(map[string]error, len(clientResp.Errors))
+	for name, v := range clientResp.Errors {
+		// A topic that is already gone is the desired end state
+		if errors.Is(v, kafka.UnknownTopicOrPartition) {
+			continue
 		}
+		failures[name] = v
 	}
+	if err := joinErrors(failures, topicName); err != nil {
+		resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))
+		return
+	}
+}
+
+// topicName describes a topic key of a Kafka response for error messages.
+func topicName(name string) string {
+	return name
 }
 
 func (r *topicResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

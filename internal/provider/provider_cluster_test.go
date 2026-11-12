@@ -71,6 +71,13 @@ func runCluster(m *testing.M, pool *dockertest.Pool, networkID, suffix string, n
 				"KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1",
 				"KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0",
 				"KAFKA_LOG_DIRS=/tmp/kraft-combined-logs",
+				// Enable ACL support. Every listener is PLAINTEXT, so all clients and
+				// the brokers themselves authenticate as User:ANONYMOUS; making that
+				// principal a super user keeps inter-broker and existing unauthenticated
+				// traffic working while still letting ACLs be created and described.
+				"KAFKA_AUTHORIZER_CLASS_NAME=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
+				"KAFKA_SUPER_USERS=User:ANONYMOUS",
+				"KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND=true",
 			},
 			Hostname:     fmt.Sprintf("kafka-%d", i),
 			NetworkID:    networkID,

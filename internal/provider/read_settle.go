@@ -68,26 +68,35 @@ func topicUnsettled(info kafkaclient.TopicInfo, state *TopicResourceModel) bool 
 // made outside Terraform costs the full window once, then is reported as drift.
 func (r *topicResource) readTopicSettled(ctx context.Context, topic string, state *TopicResourceModel) (kafkaclient.TopicInfo, error) {
 	info, err := r.kafka.Topic(ctx, topic)
-	if err != nil || !topicUnsettled(info, state) {
+	if err == nil && !topicUnsettled(info, state) {
+		return info, nil
+	}
+	if err != nil && !errors.Is(err, kafkaclient.ErrTopicNotFound) {
 		return info, err
 	}
 
+	// A topic that is missing is retried as well: a broker that has not heard
+	// about a recent create reports it as not found, and treating that as a
+	// deletion would drop the resource from state. A topic that really is gone
+	// costs the full window once.
 	waitCtx, cancel := context.WithTimeout(ctx, readSettleWindow)
 	defer cancel()
-	err = pollUntil(waitCtx, readSettleInterval, func(ctx context.Context) (bool, error) {
-		latest, err := r.kafka.Topic(ctx, topic)
+	pollErr := pollUntil(waitCtx, readSettleInterval, func(ctx context.Context) (bool, error) {
+		info, err = r.kafka.Topic(ctx, topic)
+		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
+			return false, nil
+		}
 		if err != nil {
 			return false, err
 		}
-		info = latest
 		return !topicUnsettled(info, state), nil
 	})
 	// Running out of time is expected for a change that really happened: report
 	// what the broker said last.
-	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-		return info, err
+	if pollErr != nil && !errors.Is(pollErr, context.DeadlineExceeded) {
+		return info, pollErr
 	}
-	return info, nil
+	return info, err
 }
 
 // waitForTopicVisible waits until the topic can be read back after creating

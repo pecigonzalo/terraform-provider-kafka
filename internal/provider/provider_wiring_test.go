@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/stretchr/testify/assert"
@@ -112,5 +113,42 @@ func TestTopicDataSourceConfigure(t *testing.T) {
 		resp := &datasource.ConfigureResponse{}
 		d.Configure(t.Context(), datasource.ConfigureRequest{}, resp)
 		assert.False(t, resp.Diagnostics.HasError())
+	})
+}
+
+func TestTopicResourceConfigure(t *testing.T) {
+	t.Run("accepts_resource_clients", func(t *testing.T) {
+		topicctlClient := &admin.BrokerAdminClient{}
+		r := &topicResource{}
+		resp := &resource.ConfigureResponse{}
+		r.Configure(t.Context(), resource.ConfigureRequest{
+			ProviderData: &resourceClients{kafka: &kafkaclient.Client{}, topicctl: topicctlClient},
+		}, resp)
+		assert.False(t, resp.Diagnostics.HasError())
+		assert.Same(t, topicctlClient, r.client)
+	})
+
+	t.Run("rejects_topicctl_client", func(t *testing.T) {
+		r := &topicResource{}
+		resp := &resource.ConfigureResponse{}
+		r.Configure(t.Context(), resource.ConfigureRequest{ProviderData: &admin.BrokerAdminClient{}}, resp)
+		assert.True(t, resp.Diagnostics.HasError())
+		assert.Nil(t, r.client)
+	})
+
+	t.Run("rejects_read_only_client", func(t *testing.T) {
+		r := &topicResource{}
+		resp := &resource.ConfigureResponse{}
+		r.Configure(t.Context(), resource.ConfigureRequest{ProviderData: &kafkaclient.ReadOnlyClient{}}, resp)
+		assert.True(t, resp.Diagnostics.HasError())
+		assert.Nil(t, r.client)
+	})
+
+	t.Run("nil_provider_data_is_ignored", func(t *testing.T) {
+		r := &topicResource{}
+		resp := &resource.ConfigureResponse{}
+		r.Configure(t.Context(), resource.ConfigureRequest{}, resp)
+		assert.False(t, resp.Diagnostics.HasError())
+		assert.Nil(t, r.client)
 	})
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/segmentio/kafka-go/protocol/alterpartitionreassignments"
 	"github.com/segmentio/kafka-go/protocol/createpartitions"
 	"github.com/segmentio/kafka-go/protocol/listpartitionreassignments"
-	"github.com/segmentio/kafka-go/protocol/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,11 +18,10 @@ import (
 // partitionsFakeTransport answers the partition APIs with canned responses
 // and records what it was sent.
 type partitionsFakeTransport struct {
-	err      error
-	create   *createpartitions.Response
-	alter    *alterpartitionreassignments.Response
-	list     *listpartitionreassignments.Response
-	metadata *metadata.Response
+	err    error
+	create *createpartitions.Response
+	alter  *alterpartitionreassignments.Response
+	list   *listpartitionreassignments.Response
 
 	creates []*createpartitions.Request
 	alters  []*alterpartitionreassignments.Request
@@ -44,8 +42,6 @@ func (f *partitionsFakeTransport) RoundTrip(_ context.Context, _ net.Addr, req k
 	case *listpartitionreassignments.Request:
 		f.lists = append(f.lists, r)
 		return f.list, nil
-	case *metadata.Request:
-		return f.metadata, nil
 	}
 	return nil, errors.New("unexpected request")
 }
@@ -139,6 +135,7 @@ func TestAlterPartitionReassignments(t *testing.T) {
 	}{
 		{"configured_timeout_is_halved", 10 * time.Second, 5000},
 		{"unset_timeout_uses_default", 0, 30000},
+		{"tiny_timeout_is_floored", time.Millisecond, 1000},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,6 +201,9 @@ func TestAlterPartitionReassignments_transportErrorAndValidation(t *testing.T) {
 	require.Error(t, c.AlterPartitionReassignments(t.Context(), "", []PartitionAssignment{{Replicas: []int{1}}}))
 	require.Error(t, c.AlterPartitionReassignments(t.Context(), "t", nil))
 	require.Error(t, c.AlterPartitionReassignments(t.Context(), "t", []PartitionAssignment{{Replicas: []int{1, 1}}}))
+	require.Error(t, c.AlterPartitionReassignments(t.Context(), "t", []PartitionAssignment{
+		{Partition: 0, Replicas: []int{1}}, {Partition: 0, Replicas: []int{2}},
+	}))
 	assert.Empty(t, rt.alters)
 }
 
@@ -246,17 +246,17 @@ func TestListPartitionReassignments_nothingInProgress(t *testing.T) {
 }
 
 func TestListPartitionReassignments_allPartitionsWhenNoneGiven(t *testing.T) {
-	rt := &partitionsFakeTransport{
-		metadata: &metadata.Response{Topics: []metadata.ResponseTopic{{
-			Name:       "t",
-			Partitions: []metadata.ResponsePartition{{PartitionIndex: 0}, {PartitionIndex: 1}},
-		}}},
-		list: &listpartitionreassignments.Response{},
-	}
-	_, err := newPartitionsClient(t, time.Second, rt).ListPartitionReassignments(t.Context(), "t")
+	rt := &partitionsFakeTransport{list: &listpartitionreassignments.Response{
+		Topics: []listpartitionreassignments.ResponseTopic{
+			{Name: "other", Partitions: []listpartitionreassignments.ResponsePartition{{PartitionIndex: 0}}},
+			{Name: "t", Partitions: []listpartitionreassignments.ResponsePartition{{PartitionIndex: 5, Replicas: []int32{1}}}},
+		},
+	}}
+	got, err := newPartitionsClient(t, time.Second, rt).ListPartitionReassignments(t.Context(), "t")
 	require.NoError(t, err)
 	require.Len(t, rt.lists, 1)
-	assert.Equal(t, []int32{0, 1}, rt.lists[0].Topics[0].PartitionIndexes)
+	assert.Empty(t, rt.lists[0].Topics, "no topic filter is sent, so partitions missing from cached metadata are covered")
+	assert.Equal(t, []PartitionReassignment{{Partition: 5, Replicas: []int{1}}}, got, "other topics are filtered out")
 }
 
 func TestListPartitionReassignments_errors(t *testing.T) {
@@ -269,13 +269,6 @@ func TestListPartitionReassignments_errors(t *testing.T) {
 		boom := errors.New("connection reset")
 		_, err := newPartitionsClient(t, time.Second, &partitionsFakeTransport{err: boom}).ListPartitionReassignments(t.Context(), "t", 0)
 		require.ErrorIs(t, err, boom)
-	})
-	t.Run("unknown_topic_when_listing_all", func(t *testing.T) {
-		rt := &partitionsFakeTransport{metadata: &metadata.Response{Topics: []metadata.ResponseTopic{
-			{Name: "t", ErrorCode: int16(kafka.UnknownTopicOrPartition)},
-		}}}
-		_, err := newPartitionsClient(t, time.Second, rt).ListPartitionReassignments(t.Context(), "t")
-		require.ErrorIs(t, err, ErrTopicNotFound)
 	})
 	t.Run("empty_topic", func(t *testing.T) {
 		_, err := newPartitionsClient(t, time.Second, &partitionsFakeTransport{}).ListPartitionReassignments(t.Context(), "")

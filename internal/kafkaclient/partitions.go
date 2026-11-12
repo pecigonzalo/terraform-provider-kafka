@@ -14,6 +14,9 @@ import (
 // requests when the client has no timeout configured.
 const defaultRequestTimeout = 30 * time.Second
 
+// minRequestTimeout is the smallest broker-side timeout sent with a request.
+const minRequestTimeout = time.Second
+
 var (
 	// ErrInvalidPartitions is returned (wrapped) when the broker rejects a
 	// partition count, for example because it would not increase the topic's
@@ -126,8 +129,8 @@ func validateReplicas(replicas []int) error {
 // whether it is still in progress.
 //
 // The request carries a broker-side timeout derived from the client's
-// configured timeout (half of it, or 30s when none is set). kafka-go sends the request's own Timeout field as the
-// broker's timeoutMs, and a zero value makes the broker answer
+// configured timeout (half of it with a one second floor, or 30s when none is set). kafka-go sends
+// the request's own Timeout field as the broker's timeoutMs, and a zero value makes the broker answer
 // REQUEST_TIMED_OUT before accepting the change.
 //
 // It returns errors wrapping [ErrTopicNotFound] or
@@ -140,7 +143,12 @@ func (c *Client) AlterPartitionReassignments(ctx context.Context, topic string, 
 		return fmt.Errorf("alter partition reassignments of topic %q: at least one assignment is required", topic)
 	}
 	reqAssignments := make([]kafka.AlterPartitionReassignmentsRequestAssignment, len(assignments))
+	seen := make(map[int]bool, len(assignments))
 	for i, a := range assignments {
+		if seen[a.Partition] {
+			return fmt.Errorf("alter partition reassignments of topic %q: partition %d appears more than once", topic, a.Partition)
+		}
+		seen[a.Partition] = true
 		if err := validateReplicas(a.Replicas); err != nil {
 			return fmt.Errorf("alter partition reassignments of topic %q: partition %d: %w", topic, a.Partition, err)
 		}
@@ -181,31 +189,15 @@ func (r *Reader) ListPartitionReassignments(ctx context.Context, topic string, p
 	if topic == "" {
 		return nil, errors.New("list partition reassignments: topic name must not be empty")
 	}
-	if len(partitions) == 0 {
-		// An empty index list asks the broker for nothing, so look the
-		// partitions up.
-		md, err := r.Metadata(ctx, topic)
-		if err != nil {
-			return nil, fmt.Errorf("list partition reassignments of topic %q: %w", topic, err)
-		}
-		for _, t := range md.Topics {
-			if t.Name != topic {
-				continue
-			}
-			if t.Error != nil {
-				return nil, fmt.Errorf("list partition reassignments of topic %q: %w", topic, classifyPartitionError(t.Error))
-			}
-			for _, p := range t.Partitions {
-				partitions = append(partitions, p.ID)
-			}
-		}
-		if len(partitions) == 0 {
-			return nil, fmt.Errorf("list partition reassignments of topic %q: %w", topic, ErrTopicNotFound)
-		}
+	// An empty topic map asks the broker for every reassignment in the cluster,
+	// which avoids looking partitions up in cached metadata that may predate a
+	// partition just created; the result is filtered to the topic below.
+	topics := map[string]kafka.ListPartitionReassignmentsRequestTopic{}
+	if len(partitions) > 0 {
+		topics[topic] = kafka.ListPartitionReassignmentsRequestTopic{PartitionIndexes: partitions}
 	}
-
 	resp, err := r.kc.ListPartitionReassignments(ctx, &kafka.ListPartitionReassignmentsRequest{
-		Topics:  map[string]kafka.ListPartitionReassignmentsRequestTopic{topic: {PartitionIndexes: partitions}},
+		Topics:  topics,
 		Timeout: r.requestTimeout(),
 	})
 	if err != nil {
@@ -233,7 +225,10 @@ func (r *Reader) ListPartitionReassignments(ctx context.Context, topic string, p
 // same for the requests it times itself), or a default when none is set.
 func (r *Reader) requestTimeout() time.Duration {
 	if t := r.Timeout(); t > 0 {
-		return t / 2
+		// Floor at one second: a sub-millisecond value truncates to a zero
+		// timeoutMs, which the broker rejects. The floor may exceed half the
+		// client timeout, which is harmless since the client gives up first.
+		return max(t/2, minRequestTimeout)
 	}
 	return defaultRequestTimeout
 }

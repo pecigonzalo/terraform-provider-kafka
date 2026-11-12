@@ -396,3 +396,37 @@ func TestDecreaseReplicationFactor_properties(t *testing.T) {
 		}
 	}
 }
+
+// TestExtendPartitions_withOtherTopicLoad checks that new partitions are
+// placed with other topics' load counted: rack spread still holds, and
+// without racks the spread of replica counts across brokers never widens
+// beyond what it already was (or one, when it started balanced).
+func TestExtendPartitions_withOtherTopicLoad(t *testing.T) {
+	r := rand.New(rand.NewSource(11))
+	for i := range 500 {
+		s := genScenario(r)
+		add := 1 + r.Intn(3*len(s.brokers))
+
+		got, err := ExtendPartitions(s.brokers, nil, s.others, add, s.rf)
+		require.NoError(t, err)
+		require.Len(t, got, add)
+
+		before, after := map[int]int{}, map[int]int{}
+		for _, p := range s.others {
+			for _, id := range p.Replicas {
+				before[id]++
+				after[id]++
+			}
+		}
+		for _, a := range got {
+			checkAssignment(t, s, a, s.rf)
+			for _, id := range a.Replicas {
+				after[id]++
+			}
+		}
+		if s.racks == 0 {
+			assert.LessOrEqual(t, maxSpread(after, s.brokers), max(1, maxSpread(before, s.brokers)),
+				"scenario %d: before %v after %v", i, before, after)
+		}
+	}
+}

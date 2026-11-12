@@ -70,21 +70,14 @@ func ExtendPartitions(brokers []Broker, topic, others []Partition, add, replicat
 	}
 	out := make([]Assignment, 0, add)
 	for i := range add {
-		var replicas []int
-		for len(replicas) < replicationFactor {
-			id, err := c.pick(replicas)
-			if err != nil {
-				return nil, err
-			}
-			replicas = append(replicas, id)
+		replicas, err := c.fill(nil, replicationFactor)
+		if err != nil {
+			return nil, err
 		}
 		// Lead with the replica that leads the fewest partitions so far.
 		leader := slices.MinFunc(replicas, c.compareLeaders)
 		replicas = slices.Insert(slices.DeleteFunc(replicas, func(id int) bool { return id == leader }), 0, leader)
 		c.leaders[leader]++
-		for _, id := range replicas {
-			c.replicas[id]++
-		}
 		out = append(out, Assignment{Partition: next + i, Replicas: replicas})
 	}
 	return out, nil
@@ -110,14 +103,9 @@ func IncreaseReplicationFactor(brokers []Broker, topic, others []Partition, repl
 
 	out := make([]Assignment, 0, len(topic))
 	for _, p := range sortedByID(topic) {
-		replicas := slices.Clone(p.Replicas)
-		for len(replicas) < replicationFactor {
-			id, err := c.pick(replicas)
-			if err != nil {
-				return nil, fmt.Errorf("partition %d: %w", p.ID, err)
-			}
-			replicas = append(replicas, id)
-			c.replicas[id]++
+		replicas, err := c.fill(slices.Clone(p.Replicas), replicationFactor)
+		if err != nil {
+			return nil, fmt.Errorf("partition %d: %w", p.ID, err)
 		}
 		out = append(out, Assignment{Partition: p.ID, Replicas: replicas})
 	}
@@ -194,6 +182,20 @@ func (c *cluster) rackKey(id int) string {
 		return "rack:" + rack
 	}
 	return fmt.Sprintf("broker:%d", id)
+}
+
+// fill appends brokers to replicas until it has replicationFactor entries,
+// counting each added replica towards broker load.
+func (c *cluster) fill(replicas []int, replicationFactor int) ([]int, error) {
+	for len(replicas) < replicationFactor {
+		id, err := c.pick(replicas)
+		if err != nil {
+			return nil, err
+		}
+		replicas = append(replicas, id)
+		c.replicas[id]++
+	}
+	return replicas, nil
 }
 
 // pick returns the broker that should host the next replica of a partition

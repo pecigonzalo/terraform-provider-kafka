@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -10,6 +11,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/segmentio/topicctl/pkg/admin"
+
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
 
 // Ensure provider defined types fully satisfy framework interfaces
@@ -21,7 +24,7 @@ func NewTopicDataSource() datasource.DataSource {
 
 // topicDataSource defines the data source implementation.
 type topicDataSource struct {
-	client *admin.BrokerAdminClient
+	client *kafkaclient.ReadOnlyClient
 }
 
 // topicDataSourceModel describes the data source data model.
@@ -78,12 +81,12 @@ func (d *topicDataSource) Configure(ctx context.Context, req datasource.Configur
 		return
 	}
 
-	client, ok := req.ProviderData.(*admin.BrokerAdminClient)
+	client, ok := req.ProviderData.(*kafkaclient.ReadOnlyClient)
 
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
-			fmt.Sprintf("Expected *admin.BrokerAdminClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *kafkaclient.ReadOnlyClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
 		return
@@ -102,13 +105,16 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
-	topicInfo, err := d.client.GetTopic(ctx, data.Name.ValueString(), true)
+	topicInfo, err := d.client.Topic(ctx, data.Name.ValueString())
 	if err != nil {
+		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
+			tflog.Debug(ctx, "topic not found", map[string]any{"topic": data.Name.ValueString()})
+		}
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
 		return
 	}
 
-	replicationFactor, err := replicaCount(topicInfo)
+	replicationFactor, err := kafkaclientReplicaCount(topicInfo)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to get replica count, got error: %s", err))
 		return
@@ -118,7 +124,9 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	data.Name = types.StringValue(topicInfo.Name)
 	data.Partitions = types.Int64Value(int64(len(topicInfo.Partitions)))
 	data.ReplicationFactor = types.Int64Value(int64(replicationFactor))
-	data.Version = types.Int64Value(int64(topicInfo.Version))
+	// The attribute is kept for compatibility. topicctl never populated the
+	// topic version, so it has always been 0; the kafkaclient reports none.
+	data.Version = types.Int64Value(0)
 
 	configElement := make(map[string]attr.Value)
 	for k, v := range topicInfo.Config {
@@ -135,4 +143,15 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
+}
+
+// kafkaclientReplicaCount applies replicaCount to a topic read through
+// kafkaclient, so the data source and the resource share one definition of the
+// replication factor until the resource is moved over as well.
+func kafkaclientReplicaCount(topicInfo kafkaclient.TopicInfo) (int, error) {
+	partitions := make([]admin.PartitionInfo, 0, len(topicInfo.Partitions))
+	for _, p := range topicInfo.Partitions {
+		partitions = append(partitions, admin.PartitionInfo{ID: p.ID, Replicas: p.Replicas})
+	}
+	return replicaCount(admin.TopicInfo{Name: topicInfo.Name, Partitions: partitions})
 }

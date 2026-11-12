@@ -253,3 +253,9 @@ func methodNames(t reflect.Type) []string {
 	}
 	return names
 }
+
+func TestNewTransport_MetadataTTL(t *testing.T) {
+	transport, err := newTransport(t.Context(), Config{BootstrapServer: "localhost:9092"}, fakeAWSLoader)
+	require.NoError(t, err)
+	assert.Equal(t, 2*time.Second, transport.MetadataTTL)
+}

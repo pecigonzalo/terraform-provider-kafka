@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	sigv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -16,6 +17,22 @@ import (
 )
 
 const clientID = "terraform-provider-kafka"
+
+// metadataTTL bounds how stale the transport's cached cluster metadata can be.
+//
+// kafka-go answers Metadata requests from a cache that a background goroutine
+// refreshes at random intervals below this value (default 6s). Only a
+// CreateTopics response forces an earlier refresh, and topic DescribeConfigs
+// requests go to the controller named by that cache, so a topic read right
+// after a change made elsewhere can otherwise see state up to 6s old.
+//
+// 2s cuts the worst case to 2s. The cost is one all-topics Metadata request
+// per refresh, roughly every second on average, for as long as the client
+// lives. The value also bounds how long each refresh may take (kafka-go uses
+// it as the request deadline). A failed refresh keeps the previous cache, so
+// a slow one only delays freshness. Going lower raises request load on large
+// clusters for little gain.
+const metadataTTL = 2 * time.Second
 
 // awsConfigLoader loads the ambient AWS configuration. It is a seam so the
 // aws-msk-iam path can be tested without AWS credentials or files.
@@ -34,6 +51,7 @@ func newTransport(ctx context.Context, cfg Config, loadAWS awsConfigLoader) (*ka
 	transport := &kafka.Transport{
 		ClientID:    clientID,
 		DialTimeout: cfg.Timeout,
+		MetadataTTL: metadataTTL,
 	}
 
 	if cfg.TLS.Enabled {

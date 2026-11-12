@@ -18,6 +18,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/segmentio/topicctl/pkg/admin"
+
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
 
 // Ensure KafkaProvider satisfies various provider interfaces.
@@ -207,20 +209,25 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	kafkaClientTimeout := time.Second * time.Duration(defaultTimeout)
 
 	tflog.Debug(ctx, "Creating Kafka client")
-	brokerConfig.ReadOnly = true
-	dataSourceClient, err := admin.NewBrokerAdminClient(
-		ctx,
-		brokerConfig,
-	)
+
+	// Data sources only read, so they get the read-only view of the
+	// kafkaclient client. The client does not contact the broker until it is
+	// first used.
+	//
+	// The framework has no hook that runs when the provider is torn down, so
+	// the client is never closed explicitly. It holds only idle broker
+	// connections and the transport's background metadata refresh, both of
+	// which end with the provider process that Terraform starts per run.
+	dataSourceClient, err := kafkaclient.New(ctx, kafkaClientConfig(brokerConfig, kafkaClientTimeout))
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
 				"Kafka Error: "+err.Error())
 		return
 	}
-	dataSourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
-	resp.DataSourceData = dataSourceClient
+	resp.DataSourceData = dataSourceClient.ReadOnly()
 
+	// The topic resource still writes through topicctl.
 	brokerConfig.ReadOnly = false
 	resourceClient, err := admin.NewBrokerAdminClient(
 		ctx,
@@ -235,6 +242,28 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	resourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
 	resp.ResourceData = resourceClient
 	tflog.Info(ctx, "Configured Kafka client", map[string]any{"success": true})
+}
+
+// kafkaClientConfig maps the resolved provider settings to a kafkaclient
+// configuration, so the precedence of configuration over environment variables
+// is decided in one place.
+func kafkaClientConfig(brokerConfig admin.BrokerAdminClientConfig, timeout time.Duration) kafkaclient.Config {
+	cfg := kafkaclient.Config{
+		BootstrapServer: brokerConfig.BrokerAddr,
+		TLS: kafkaclient.TLSConfig{
+			Enabled:    brokerConfig.TLS.Enabled,
+			SkipVerify: brokerConfig.TLS.SkipVerify,
+		},
+		Timeout: timeout,
+	}
+	if brokerConfig.SASL.Enabled {
+		cfg.SASL = &kafkaclient.SASLConfig{
+			Mechanism: string(brokerConfig.SASL.Mechanism),
+			Username:  brokerConfig.SASL.Username,
+			Password:  brokerConfig.SASL.Password,
+		}
+	}
+	return cfg
 }
 
 // bootstrapServer returns the broker address used to bootstrap the client.
@@ -270,25 +299,24 @@ func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (admin.SASLConf
 		password = sasl.Password.ValueString()
 	}
 
-	// Accept both "scram-sha256" and "scram-sha-256" style names.
-	normalized := strings.ToLower(strings.TrimSpace(mechanism))
-	normalized = strings.ReplaceAll(normalized, "scram-sha-", "scram-sha")
+	parsed, err := kafkaclient.ParseSASLMechanism(mechanism)
+	if err != nil {
+		return admin.SASLConfig{}, err
+	}
 
 	var saslMechanism admin.SASLMechanism
-	switch normalized {
-	case "plain":
+	switch parsed {
+	case kafkaclient.SASLMechanismPlain:
 		saslMechanism = admin.SASLMechanismPlain
-	case "scram-sha256":
+	case kafkaclient.SASLMechanismScramSHA256:
 		saslMechanism = admin.SASLMechanismScramSHA256
-	case "scram-sha512":
+	case kafkaclient.SASLMechanismScramSHA512:
 		saslMechanism = admin.SASLMechanismScramSHA512
-	case "aws-msk-iam":
+	case kafkaclient.SASLMechanismAWSMSKIAM:
 		return admin.SASLConfig{
 			Enabled:   true,
 			Mechanism: admin.SASLMechanismAWSMSKIAM,
 		}, nil
-	default:
-		return admin.SASLConfig{}, fmt.Errorf("unable to detect SASL mechanism: %q", mechanism)
 	}
 
 	return admin.SASLConfig{

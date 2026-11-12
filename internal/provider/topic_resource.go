@@ -219,6 +219,10 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
 		return
 	}
+	if err := r.waitForTopicVisible(ctx, data.Name.ValueString()); err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Topic was created but could not be read back, got error: %s", err))
+		return
+	}
 	data.ID = data.Name
 	tflog.Trace(ctx, "Created topic")
 

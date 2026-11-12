@@ -89,3 +89,27 @@ func (r *topicResource) readTopicSettled(ctx context.Context, topic string, stat
 	}
 	return info, nil
 }
+
+// waitForTopicVisible waits until the topic can be read back after creating
+// it. Creating a topic returns once the controller accepted it, but the broker
+// that answers the next metadata request, or the client's cached metadata, can
+// still predate it and report the topic as not found. Without this wait the
+// next Read would take that for a deletion and drop the resource from state.
+//
+// Running out of the settle window is not an error: the topic was created, so
+// the apply succeeds and a later Read reports whatever the cluster says then.
+func (r *topicResource) waitForTopicVisible(ctx context.Context, topic string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, readSettleWindow)
+	defer cancel()
+	err := pollUntil(waitCtx, readSettleInterval, func(ctx context.Context) (bool, error) {
+		_, err := r.kafka.Topic(ctx, topic)
+		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
+			return false, nil
+		}
+		return err == nil, err
+	})
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
+}

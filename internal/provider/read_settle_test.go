@@ -1,7 +1,11 @@
 package provider
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -86,5 +90,103 @@ func TestTopicUnsettled(t *testing.T) {
 		st.Config = types.MapValueMust(types.StringType, map[string]attr.Value{"a": types.StringValue("1")})
 		require.True(t, topicUnsettled(topic(3, 2, map[string]string{"a": "0"}), st))
 		require.False(t, topicUnsettled(topic(3, 2, map[string]string{"a": "1"}), st))
+	})
+}
+
+// scriptedTopicReads replays results in order and repeats the last one.
+type scriptedTopicReads struct {
+	results []error // nil means the topic is found
+	cycle   bool    // repeat results from the start instead of the last one
+	calls   int
+}
+
+func (s *scriptedTopicReads) read(context.Context) (kafkaclient.TopicInfo, error) {
+	i := min(s.calls, len(s.results)-1)
+	if s.cycle {
+		i = s.calls % len(s.results)
+	}
+	s.calls++
+	if s.results[i] != nil {
+		return kafkaclient.TopicInfo{}, s.results[i]
+	}
+	return kafkaclient.TopicInfo{Name: "t", Partitions: []kafkaclient.PartitionInfo{{ID: 0, Replicas: []int{1}}}}, nil
+}
+
+func TestSettleTopicRead(t *testing.T) {
+	gone := fmt.Errorf("topic %q: %w", "t", kafkaclient.ErrTopicNotFound)
+	boom := errors.New("boom")
+	state := &TopicResourceModel{
+		Partitions:        types.Int64Value(1),
+		ReplicationFactor: types.Int64Value(1),
+		Config:            types.MapNull(types.StringType),
+	}
+	const interval, window = time.Millisecond, 2 * time.Second
+
+	tests := []struct {
+		name      string
+		results   []error
+		wantFound bool
+		wantErr   error
+	}{
+		{"found_at_once", []error{nil}, true, nil},
+		{"absent_briefly_then_present", []error{gone, gone, nil}, true, nil},
+		{"present_then_absent_once_then_present", []error{nil, gone, nil}, true, nil},
+		{"other_error_is_returned", []error{boom}, false, boom},
+		{"other_error_after_absence_is_returned", []error{gone, boom}, false, boom},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &scriptedTopicReads{results: tc.results}
+			info, err := settleTopicRead(t.Context(), s.read, state, interval, window)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "t", info.Name)
+		})
+	}
+
+	t.Run("absent_consistently_is_gone", func(t *testing.T) {
+		s := &scriptedTopicReads{results: []error{gone}}
+		_, err := settleTopicRead(t.Context(), s.read, state, interval, 50*time.Millisecond)
+		require.ErrorIs(t, err, kafkaclient.ErrTopicNotFound)
+		require.GreaterOrEqual(t, s.calls, minAbsentChecks, "must check several times before reporting a deletion")
+	})
+
+	t.Run("isolated_absences_while_unsettled_are_not_a_deletion", func(t *testing.T) {
+		// The topic never settles against state (partitions differ), so Read polls
+		// until the window ends. Absences never come five in a row, so it is not gone.
+		mismatch := &TopicResourceModel{Partitions: types.Int64Value(9), ReplicationFactor: types.Int64Null(), Config: types.MapNull(types.StringType)}
+		s := &scriptedTopicReads{results: []error{nil, nil, gone}, cycle: true}
+		info, err := settleTopicRead(t.Context(), s.read, mismatch, interval, 50*time.Millisecond)
+		require.NoError(t, err)
+		require.Equal(t, "t", info.Name)
+	})
+}
+
+func TestWaitForVisible(t *testing.T) {
+	gone := fmt.Errorf("topic: %w", kafkaclient.ErrTopicNotFound)
+	boom := errors.New("boom")
+
+	t.Run("requires_consecutive_sightings", func(t *testing.T) {
+		// found, found, absent, then found for good: needs three in a row after the gap.
+		results := []error{nil, nil, gone, nil, nil, nil}
+		calls := 0
+		err := waitForVisible(t.Context(), func(context.Context) error {
+			r := results[min(calls, len(results)-1)]
+			calls++
+			return r
+		}, time.Millisecond, 2*time.Second)
+		require.NoError(t, err)
+		require.Equal(t, len(results), calls)
+	})
+	t.Run("never_visible_is_not_an_error", func(t *testing.T) {
+		err := waitForVisible(t.Context(), func(context.Context) error { return gone }, time.Millisecond, 20*time.Millisecond)
+		require.NoError(t, err)
+	})
+	t.Run("other_error_is_returned", func(t *testing.T) {
+		err := waitForVisible(t.Context(), func(context.Context) error { return boom }, time.Millisecond, time.Second)
+		require.ErrorIs(t, err, boom)
 	})
 }

@@ -56,18 +56,47 @@ func topicUnsettled(info kafkaclient.TopicInfo, state *TopicResourceModel) bool 
 	return !state.Config.IsNull() && configUnsettled(state.Config, info.Config)
 }
 
+// minAbsentChecks is how many consecutive "topic not found" answers, spread
+// over the settle window, it takes before a topic is reported as gone. Fewer
+// than that is treated as a lagging broker, not a deletion.
+const minAbsentChecks = 5
+
+// minVisibleChecks is how many consecutive reads must find a newly created
+// topic before the create is considered settled.
+const minVisibleChecks = 3
+
 // readTopicSettled returns the topic, re-reading for a short while if it
-// disagrees with state (see topicUnsettled).
+// disagrees with state (see topicUnsettled) or is reported as not found.
 //
 // A topic write returns once the controller accepted it, but other brokers can
 // answer from older metadata for a moment, and the client may talk to a
-// different broker on each request. A Read straight after a write could then
-// see a setting missing or at its old value, or the old partition count, and
-// report it as drift. Waiting after the write cannot fix that, because the next
-// request can still reach a lagging broker, so Read retries instead. A change
-// made outside Terraform costs the full window once, then is reported as drift.
+// different broker on each request. kafka-go also serves metadata from a cache
+// that a background refresh replaces wholesale with the answer of one broker,
+// so a topic that was visible can briefly disappear again. A Read straight
+// after a write could then see a setting missing or at its old value, the old
+// partition count, or no topic at all, and report it as drift or as a
+// deletion. Waiting after the write cannot fix that, because the next request
+// can still reach a lagging broker, so Read retries instead.
+//
+// A change made outside Terraform costs the full window once, then is reported
+// as drift. A topic deleted outside Terraform is only reported as gone after
+// being absent for minAbsentChecks consecutive checks, so it also takes the
+// full window to be noticed.
 func (r *topicResource) readTopicSettled(ctx context.Context, topic string, state *TopicResourceModel) (kafkaclient.TopicInfo, error) {
-	info, err := r.kafka.Topic(ctx, topic)
+	return settleTopicRead(ctx, func(ctx context.Context) (kafkaclient.TopicInfo, error) {
+		return r.kafka.Topic(ctx, topic)
+	}, state, readSettleInterval, readSettleWindow)
+}
+
+// settleTopicRead implements readTopicSettled on top of read, so the retry
+// behavior can be tested without a cluster.
+func settleTopicRead(
+	ctx context.Context,
+	read func(context.Context) (kafkaclient.TopicInfo, error),
+	state *TopicResourceModel,
+	interval, window time.Duration,
+) (kafkaclient.TopicInfo, error) {
+	info, err := read(ctx)
 	if err == nil && !topicUnsettled(info, state) {
 		return info, nil
 	}
@@ -75,47 +104,75 @@ func (r *topicResource) readTopicSettled(ctx context.Context, topic string, stat
 		return info, err
 	}
 
-	// A topic that is missing is retried as well: a broker that has not heard
-	// about a recent create reports it as not found, and treating that as a
-	// deletion would drop the resource from state. A topic that really is gone
-	// costs the full window once.
-	waitCtx, cancel := context.WithTimeout(ctx, readSettleWindow)
+	var (
+		last   kafkaclient.TopicInfo // latest topic that was found
+		found  bool
+		absent int // consecutive not-found answers, including the first read
+		notErr error
+	)
+	observe := func(info kafkaclient.TopicInfo, err error) {
+		if err != nil {
+			absent++
+			notErr = err
+			return
+		}
+		absent = 0
+		last, found = info, true
+	}
+	observe(info, err)
+
+	waitCtx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
-	pollErr := pollUntil(waitCtx, readSettleInterval, func(ctx context.Context) (bool, error) {
-		info, err = r.kafka.Topic(ctx, topic)
+	pollErr := pollUntil(waitCtx, interval, func(ctx context.Context) (bool, error) {
+		info, err := read(ctx)
+		if err != nil && !errors.Is(err, kafkaclient.ErrTopicNotFound) {
+			return false, err
+		}
+		observe(info, err)
+		return err == nil && !topicUnsettled(info, state), nil
+	})
+	// Running out of time is expected for a change that really happened: report
+	// what the broker said last.
+	if pollErr != nil && !errors.Is(pollErr, context.DeadlineExceeded) {
+		return last, pollErr
+	}
+	if absent >= minAbsentChecks || !found {
+		return kafkaclient.TopicInfo{}, notErr
+	}
+	return last, nil
+}
+
+// waitForTopicVisible waits until a just-created topic can be read back
+// minVisibleChecks times in a row. Creating a topic returns once the
+// controller accepted it, but the broker that answers the next metadata
+// request, or the client's cached metadata, can still predate it and report it
+// as not found. A single sighting is not enough either, because a later
+// background metadata refresh can replace the cache with an older view.
+//
+// Running out of the settle window is not an error: the topic was created, so
+// the apply succeeds and a later Read reports whatever the cluster says then.
+func (r *topicResource) waitForTopicVisible(ctx context.Context, topic string) error {
+	return waitForVisible(ctx, func(ctx context.Context) error {
+		_, err := r.kafka.Topic(ctx, topic)
+		return err
+	}, readSettleInterval, readSettleWindow)
+}
+
+func waitForVisible(ctx context.Context, read func(context.Context) error, interval, window time.Duration) error {
+	waitCtx, cancel := context.WithTimeout(ctx, window)
+	defer cancel()
+	visible := 0
+	err := pollUntil(waitCtx, interval, func(ctx context.Context) (bool, error) {
+		err := read(ctx)
 		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
+			visible = 0
 			return false, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		return !topicUnsettled(info, state), nil
-	})
-	// Running out of time is expected for a change that really happened: report
-	// what the broker said last.
-	if pollErr != nil && !errors.Is(pollErr, context.DeadlineExceeded) {
-		return info, pollErr
-	}
-	return info, err
-}
-
-// waitForTopicVisible waits until the topic can be read back after creating
-// it. Creating a topic returns once the controller accepted it, but the broker
-// that answers the next metadata request, or the client's cached metadata, can
-// still predate it and report the topic as not found. Without this wait the
-// next Read would take that for a deletion and drop the resource from state.
-//
-// Running out of the settle window is not an error: the topic was created, so
-// the apply succeeds and a later Read reports whatever the cluster says then.
-func (r *topicResource) waitForTopicVisible(ctx context.Context, topic string) error {
-	waitCtx, cancel := context.WithTimeout(ctx, readSettleWindow)
-	defer cancel()
-	err := pollUntil(waitCtx, readSettleInterval, func(ctx context.Context) (bool, error) {
-		_, err := r.kafka.Topic(ctx, topic)
-		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
-			return false, nil
-		}
-		return err == nil, err
+		visible++
+		return visible >= minVisibleChecks, nil
 	})
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return err

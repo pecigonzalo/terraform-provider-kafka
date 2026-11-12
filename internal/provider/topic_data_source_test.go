@@ -62,6 +62,9 @@ func TestAccTopicDataSourceConfiguration(t *testing.T) {
 				Check:  resource.TestCheckResourceAttr("kafka_topic.test", "configuration.retention.ms", "60000"),
 			},
 			{
+				// Every broker must have applied the configuration before the data
+				// source reads it, see waitForTopicConfig.
+				PreConfig: func() { waitForTopicConfig(t, name, "retention.ms", "60000") },
 				Config: testAccTopicDataSourceConfigurationTopic(name, "60000") + `
 data "kafka_topic" "test" {
   name = kafka_topic.test.name

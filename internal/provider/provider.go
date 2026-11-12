@@ -210,22 +210,23 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 
 	tflog.Debug(ctx, "Creating Kafka client")
 
-	// Data sources only read, so they get the read-only view of the
-	// kafkaclient client. The client does not contact the broker until it is
-	// first used.
+	// One read-write kafkaclient client serves the whole provider: data
+	// sources only read, so they get its read-only view, and resources get the
+	// client itself. The client does not contact the broker until it is first
+	// used.
 	//
 	// The framework has no hook that runs when the provider is torn down, so
 	// the client is never closed explicitly. It holds only idle broker
 	// connections and the transport's background metadata refresh, both of
 	// which end with the provider process that Terraform starts per run.
-	dataSourceClient, err := kafkaclient.New(ctx, kafkaClientConfig(brokerConfig, kafkaClientTimeout))
+	kafkaClient, err := kafkaclient.New(ctx, kafkaClientConfig(brokerConfig, kafkaClientTimeout))
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
 				"Kafka Error: "+err.Error())
 		return
 	}
-	resp.DataSourceData = dataSourceClient.ReadOnly()
+	resp.DataSourceData = kafkaClient.ReadOnly()
 
 	// The topic resource still writes through topicctl.
 	brokerConfig.ReadOnly = false
@@ -240,8 +241,21 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 	resourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
-	resp.ResourceData = resourceClient
+	resp.ResourceData = &resourceClients{
+		kafka:    kafkaClient,
+		topicctl: resourceClient,
+	}
 	tflog.Info(ctx, "Configured Kafka client", map[string]any{"success": true})
+}
+
+// resourceClients is the provider data handed to resources. A single value
+// carries both clients because the framework passes resources one value.
+type resourceClients struct {
+	// kafka is the read-write kafkaclient client.
+	kafka *kafkaclient.Client
+	// topicctl exists only until the topic resource moves to kafkaclient; it
+	// is then removed and resources receive just the kafkaclient client.
+	topicctl *admin.BrokerAdminClient
 }
 
 // kafkaClientConfig maps the resolved provider settings to a kafkaclient

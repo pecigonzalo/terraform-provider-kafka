@@ -114,18 +114,18 @@ func (r *topicResource) Configure(_ context.Context, req resource.ConfigureReque
 		return
 	}
 
-	client, ok := req.ProviderData.(*admin.BrokerAdminClient)
+	clients, ok := req.ProviderData.(*resourceClients)
 
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *admin.BrokerAdminClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *provider.resourceClients, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
 		return
 	}
 
-	r.client = client
+	r.client = clients.topicctl
 }
 
 // ModifyPlan rejects changes Kafka cannot apply, so they fail at plan time

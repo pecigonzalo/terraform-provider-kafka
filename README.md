@@ -11,8 +11,8 @@ A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmenti
     - [x] PLAINTEXT
   - [x] PLAINTEXT
 - [x] Topic management
-- [ ] ACL management
-- [ ] Quota management
+- [x] ACL management
+- [x] Quota management
 - [x] Development
   - [x] Local acceptance testing Kafka
   - [x] Automated release process

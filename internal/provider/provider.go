@@ -228,7 +228,8 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 	resp.DataSourceData = kafkaClient.ReadOnly()
 
-	// The topic resource still writes through topicctl.
+	// The topic resource still needs topicctl to change the replication factor
+	// and to add partitions.
 	brokerConfig.ReadOnly = false
 	resourceClient, err := admin.NewBrokerAdminClient(
 		ctx,
@@ -253,8 +254,8 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 type resourceClients struct {
 	// kafka is the read-write kafkaclient client.
 	kafka *kafkaclient.Client
-	// topicctl exists only until the topic resource moves to kafkaclient; it
-	// is then removed and resources receive just the kafkaclient client.
+	// topicctl is only used by the topic resource to change the replication
+	// factor and add partitions. It is removed once those use kafkaclient.
 	topicctl *admin.BrokerAdminClient
 }
 

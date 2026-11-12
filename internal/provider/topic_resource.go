@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +23,8 @@ import (
 	"github.com/segmentio/topicctl/pkg/apply/assigners"
 	"github.com/segmentio/topicctl/pkg/apply/extenders"
 	"github.com/segmentio/topicctl/pkg/apply/pickers"
+
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
 
 // topicNameCharsRegexp matches the characters Kafka allows in topic names.
@@ -42,8 +43,13 @@ func NewTopicResource() resource.Resource {
 }
 
 // topicResource defines the resource implementation.
+//
+// Create, read, delete and configuration updates go through kafka. Changing
+// the replication factor or growing the partition count still uses topicctl's
+// placement logic and is the only remaining user of the topicctl client.
 type topicResource struct {
-	client *admin.BrokerAdminClient
+	kafka    *kafkaclient.Client
+	topicctl *admin.BrokerAdminClient
 }
 
 // TopicResourceModel describes the resource data model.
@@ -125,7 +131,8 @@ func (r *topicResource) Configure(_ context.Context, req resource.ConfigureReque
 		return
 	}
 
-	r.client = clients.topicctl
+	r.kafka = clients.kafka
+	r.topicctl = clients.topicctl
 }
 
 // ModifyPlan rejects changes Kafka cannot apply, so they fail at plan time
@@ -172,10 +179,10 @@ func validatePartitionsNotReduced(plan, state *TopicResourceModel, resp *resourc
 // validateReplicationFactorAtPlan errors when the planned replication factor is above the broker count.
 // It skips the check when the value is unknown or the provider is not configured yet.
 func (r *topicResource) validateReplicationFactorAtPlan(ctx context.Context, plan *TopicResourceModel, resp *resource.ModifyPlanResponse) {
-	if plan.ReplicationFactor.IsUnknown() || r.client == nil {
+	if plan.ReplicationFactor.IsUnknown() || r.kafka == nil {
 		return
 	}
-	brokerIDs, err := r.client.GetBrokerIDs(ctx)
+	brokerIDs, err := r.kafka.BrokerIDs(ctx)
 	if err != nil {
 		// The cluster may be unreachable during plan; apply repeats this check.
 		tflog.Debug(ctx, fmt.Sprintf("Skipping replication factor plan check: %s", err))
@@ -201,27 +208,15 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	// Generate KafkaConfig
-	configEntries := configEntries(data.Config)
-	topicConfig := kafka.TopicConfig{
-		Topic:             data.Name.ValueString(),
-		NumPartitions:     int(data.Partitions.ValueInt64()),
-		ReplicationFactor: int(data.ReplicationFactor.ValueInt64()),
-		ConfigEntries:     configEntries,
-	}
-
 	tflog.Info(ctx, fmt.Sprintf("Creating topic %s", data.Name.ValueString()))
-	createRequest := kafka.CreateTopicsRequest{
-		Topics: []kafka.TopicConfig{topicConfig},
-	}
-	// We use the internal client create topic, as the external one does not handle Errors in response
-	clientResp, err := r.client.GetConnector().KafkaClient.CreateTopics(ctx, &createRequest)
+	err := r.kafka.CreateTopic(ctx, kafkaclient.NewTopic{
+		Name:              data.Name.ValueString(),
+		Partitions:        int(data.Partitions.ValueInt64()),
+		ReplicationFactor: int(data.ReplicationFactor.ValueInt64()),
+		Config:            configMap(data.Config),
+	})
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
-		return
-	}
-	if err := joinErrors(clientResp.Errors, topicName); err != nil {
-		resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
 		return
 	}
 	data.ID = data.Name
@@ -242,7 +237,7 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 
 	topicInfo, err := r.readTopicSettled(ctx, data.ID.ValueString(), data)
 	if err != nil {
-		if errors.Is(err, admin.ErrTopicDoesNotExist) {
+		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
 			// If the Topic does not exist, we remove it and return
 			resp.State.RemoveResource(ctx)
 			return
@@ -251,7 +246,7 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	replicationFactor, err := replicaCount(topicInfo)
+	replicationFactor, err := kafkaclientReplicaCount(topicInfo)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to get replica count, got error: %s", err))
 		return
@@ -338,88 +333,25 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 }
 
 func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel) error {
-	// Generate KafkaConfig
-	configEntries := configEntries(data.Config)
-
-	alterConfigsRequest := kafka.AlterConfigsRequest{
-		Resources: []kafka.AlterConfigRequestResource{
-			{
-				ResourceType: kafka.ResourceTypeTopic,
-				ResourceName: data.Name.ValueString(),
-				Configs:      configEntriesToAlterConfigs(configEntries),
-			},
-		},
-	}
-
-	clientResp, err := r.client.GetConnector().KafkaClient.AlterConfigs(ctx, &alterConfigsRequest)
-	if err != nil {
-		return err
-	}
-	return joinErrors(clientResp.Errors, func(res kafka.AlterConfigsResponseResource) string {
-		return fmt.Sprintf("%s %q", kafka.ResourceType(res.Type), res.Name)
-	})
+	return r.kafka.AlterTopicConfig(ctx, data.Name.ValueString(), configMap(data.Config))
 }
 
-// joinErrors returns every non-nil error in errs as a single error, or nil if
-// there are none. Each error is prefixed with describe(key) so the message
-// names the topic or resource it belongs to. Entries are sorted by that
-// description so the message is deterministic.
-func joinErrors[K comparable](errs map[K]error, describe func(K) string) error {
-	type failure struct {
-		name string
-		err  error
-	}
-	var failures []failure
-	for k, err := range errs {
-		if err != nil {
-			failures = append(failures, failure{name: describe(k), err: err})
-		}
-	}
-	slices.SortFunc(failures, func(a, b failure) int {
-		return cmp.Compare(a.name, b.name)
-	})
-	wrapped := make([]error, 0, len(failures))
-	for _, f := range failures {
-		wrapped = append(wrapped, fmt.Errorf("%s: %w", f.name, f.err))
-	}
-	return errors.Join(wrapped...)
-}
-
-// configEntries converts a Terraform map of strings into Kafka config entries.
-func configEntries(config types.Map) []kafka.ConfigEntry {
-	var entries []kafka.ConfigEntry
+// configMap converts a Terraform map of strings into a plain map, dropping
+// null and unknown elements.
+func configMap(config types.Map) map[string]string {
+	out := make(map[string]string, len(config.Elements()))
 	for k, v := range config.Elements() {
 		str, ok := v.(types.String)
 		if !ok || str.IsNull() || str.IsUnknown() {
 			continue
 		}
-		entries = append(entries, kafka.ConfigEntry{
-			ConfigName:  k,
-			ConfigValue: str.ValueString(),
-		})
+		out[k] = str.ValueString()
 	}
-	return entries
-}
-
-// Generate a AlterConfigRequestConfig from ConfigEntry
-func configEntriesToAlterConfigs(
-	configEntries []kafka.ConfigEntry,
-) []kafka.AlterConfigRequestConfig {
-	apiConfigs := []kafka.AlterConfigRequestConfig{}
-	for _, entry := range configEntries {
-		apiConfigs = append(
-			apiConfigs,
-			kafka.AlterConfigRequestConfig{
-				Name:  entry.ConfigName,
-				Value: entry.ConfigValue,
-			},
-		)
-	}
-	return apiConfigs
+	return out
 }
 
 func (r *topicResource) updateReplicationFactor(ctx context.Context, data *TopicResourceModel) error {
-	brokerIDs, err := r.client.GetBrokerIDs(ctx)
+	brokerIDs, err := r.topicctl.GetBrokerIDs(ctx)
 	if err != nil {
 		return err
 	}
@@ -428,11 +360,11 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 		return fmt.Errorf("replication factor cannot be higher than the number of brokers")
 	}
 
-	topicInfo, err := r.client.GetTopic(ctx, data.Name.ValueString(), false)
+	topicInfo, err := r.topicctl.GetTopic(ctx, data.Name.ValueString(), false)
 	if err != nil {
 		return err
 	}
-	brokersInfo, err := r.client.GetBrokers(ctx, brokerIDs)
+	brokersInfo, err := r.topicctl.GetBrokers(ctx, brokerIDs)
 	if err != nil {
 		return err
 	}
@@ -441,7 +373,7 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 	// broker placement within the topic and, also, the placement might change during
 	// the apply process.
 	nonAppliedTopics := []admin.TopicInfo{}
-	topics, err := r.client.GetTopics(ctx, nil, false)
+	topics, err := r.topicctl.GetTopics(ctx, nil, false)
 	if err != nil {
 		return err
 	}
@@ -503,12 +435,12 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 		Assignments: apiAssignments,
 		// Without a timeout the broker gets timeoutMs=0 and fails the request
 		// with REQUEST_TIMED_OUT before the reassignment is accepted.
-		Timeout: r.client.GetConnector().KafkaClient.Timeout,
+		Timeout: r.topicctl.GetConnector().KafkaClient.Timeout,
 	}
 
 	tflog.Info(ctx, fmt.Sprintf("%v", alterPartitionReassignmentsRequest.Assignments))
 
-	clientResp, err := r.client.GetConnector().KafkaClient.AlterPartitionReassignments(ctx, &alterPartitionReassignmentsRequest)
+	clientResp, err := r.topicctl.GetConnector().KafkaClient.AlterPartitionReassignments(ctx, &alterPartitionReassignmentsRequest)
 	if err != nil {
 		return err
 	}
@@ -530,7 +462,7 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 	// The reassignment is asynchronous. Wait for it to finish so that the
 	// next Read and the saved state reflect the cluster, not the plan.
 	waitCtx := ctx
-	timeout := r.client.GetConnector().KafkaClient.Timeout
+	timeout := r.topicctl.GetConnector().KafkaClient.Timeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		waitCtx, cancel = context.WithTimeout(ctx, timeout)
@@ -555,7 +487,7 @@ func (r *topicResource) updateReplicationFactor(ctx context.Context, data *Topic
 // replicaReassignmentDone reports whether every partition of the topic has the
 // desired replica count and no partition reassignment is still in progress.
 func (r *topicResource) replicaReassignmentDone(ctx context.Context, topic string, replicationFactor int) (bool, error) {
-	topicInfo, err := r.client.GetTopic(ctx, topic, false)
+	topicInfo, err := r.topicctl.GetTopic(ctx, topic, false)
 	if err != nil {
 		return false, err
 	}
@@ -568,7 +500,7 @@ func (r *topicResource) replicaReassignmentDone(ctx context.Context, topic strin
 		partitionIDs = append(partitionIDs, partition.ID)
 	}
 
-	listResp, err := r.client.GetConnector().KafkaClient.ListPartitionReassignments(ctx, &kafka.ListPartitionReassignmentsRequest{
+	listResp, err := r.topicctl.GetConnector().KafkaClient.ListPartitionReassignments(ctx, &kafka.ListPartitionReassignmentsRequest{
 		Topics: map[string]kafka.ListPartitionReassignmentsRequestTopic{
 			topic: {PartitionIndexes: partitionIDs},
 		},
@@ -612,15 +544,15 @@ func reduceReplicas(desired int, replicas []int, leader int) []int {
 }
 
 func (r *topicResource) updatePartitions(ctx context.Context, data *TopicResourceModel) error {
-	brokerIDs, err := r.client.GetBrokerIDs(ctx)
+	brokerIDs, err := r.topicctl.GetBrokerIDs(ctx)
 	if err != nil {
 		return err
 	}
-	brokersInfo, err := r.client.GetBrokers(ctx, brokerIDs)
+	brokersInfo, err := r.topicctl.GetBrokers(ctx, brokerIDs)
 	if err != nil {
 		return err
 	}
-	topicInfo, err := r.client.GetTopic(ctx, data.Name.ValueString(), false)
+	topicInfo, err := r.topicctl.GetTopic(ctx, data.Name.ValueString(), false)
 	if err != nil {
 		return err
 	}
@@ -657,7 +589,7 @@ func (r *topicResource) updatePartitions(ctx context.Context, data *TopicResourc
 
 	tflog.Info(ctx, fmt.Sprintf("Assignments: %v", desiredAssignments))
 
-	err = r.client.AddPartitions(ctx, data.Name.ValueString(), desiredAssignments)
+	err = r.topicctl.AddPartitions(ctx, data.Name.ValueString(), desiredAssignments)
 	if err != nil {
 		return err
 	}
@@ -671,7 +603,7 @@ func (r *topicResource) updatePartitions(ctx context.Context, data *TopicResourc
 // makes the saved state and anything reading the topic afterwards agree.
 func (r *topicResource) waitForPartitions(ctx context.Context, topic string, want int) error {
 	waitCtx := ctx
-	timeout := r.client.GetConnector().KafkaClient.Timeout
+	timeout := r.topicctl.GetConnector().KafkaClient.Timeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		waitCtx, cancel = context.WithTimeout(ctx, timeout)
@@ -679,7 +611,7 @@ func (r *topicResource) waitForPartitions(ctx context.Context, topic string, wan
 	}
 
 	err := pollUntil(waitCtx, partitionPollInterval, func(ctx context.Context) (bool, error) {
-		info, err := r.client.GetTopic(ctx, topic, false)
+		info, err := r.topicctl.GetTopic(ctx, topic, false)
 		if err != nil {
 			return false, err
 		}
@@ -708,30 +640,12 @@ func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		return
 	}
 
-	clientResp, err := r.client.GetConnector().KafkaClient.DeleteTopics(ctx, &kafka.DeleteTopicsRequest{
-		Topics: []string{data.Name.ValueString()},
-	})
-	if err != nil {
+	// A topic that is already gone is the desired end state.
+	err := r.kafka.DeleteTopics(ctx, data.Name.ValueString())
+	if err != nil && !errors.Is(err, kafkaclient.ErrTopicNotFound) {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))
 		return
 	}
-	failures := make(map[string]error, len(clientResp.Errors))
-	for name, v := range clientResp.Errors {
-		// A topic that is already gone is the desired end state
-		if errors.Is(v, kafka.UnknownTopicOrPartition) {
-			continue
-		}
-		failures[name] = v
-	}
-	if err := joinErrors(failures, topicName); err != nil {
-		resp.Diagnostics.AddError("Client Response Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))
-		return
-	}
-}
-
-// topicName describes a topic key of a Kafka response for error messages.
-func topicName(name string) string {
-	return name
 }
 
 func (r *topicResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

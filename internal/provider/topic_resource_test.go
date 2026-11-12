@@ -10,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
-	kafka "github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -138,14 +137,13 @@ func TestReduceReplicas(t *testing.T) {
 	}
 }
 
-func TestConfigEntries(t *testing.T) {
+func TestConfigMap(t *testing.T) {
 	m := types.MapValueMust(types.StringType, map[string]attr.Value{
 		"retention.ms": types.StringValue(`say "hi"`),
 		"null.value":   types.StringNull(),
 	})
-	entries := configEntries(m)
-	assert.Equal(t, []kafka.ConfigEntry{{ConfigName: "retention.ms", ConfigValue: `say "hi"`}}, entries)
-	assert.Empty(t, configEntries(types.MapNull(types.StringType)))
+	assert.Equal(t, map[string]string{"retention.ms": `say "hi"`}, configMap(m))
+	assert.Empty(t, configMap(types.MapNull(types.StringType)))
 }
 
 func TestAccTopicResourcePartitions(t *testing.T) {

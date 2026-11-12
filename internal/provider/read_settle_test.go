@@ -5,8 +5,9 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
 
 func TestConfigUnsettled(t *testing.T) {
@@ -43,10 +44,10 @@ func TestConfigUnsettled(t *testing.T) {
 func TestTopicUnsettled(t *testing.T) {
 	// topic builds a topic with the given partition count, every partition
 	// having the given number of replicas, and the given config.
-	topic := func(partitions, replicas int, config map[string]string) admin.TopicInfo {
-		info := admin.TopicInfo{Config: config}
+	topic := func(partitions, replicas int, config map[string]string) kafkaclient.TopicInfo {
+		info := kafkaclient.TopicInfo{Config: config}
 		for i := range partitions {
-			info.Partitions = append(info.Partitions, admin.PartitionInfo{ID: i, Replicas: make([]int, replicas)})
+			info.Partitions = append(info.Partitions, kafkaclient.PartitionInfo{ID: i, Replicas: make([]int, replicas)})
 		}
 		return info
 	}

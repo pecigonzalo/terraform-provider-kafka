@@ -6,7 +6,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/segmentio/topicctl/pkg/admin"
+
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
 
 const (
@@ -39,7 +40,7 @@ func configUnsettled(tracked types.Map, reported map[string]string) bool {
 // disagrees with state: a different partition count or replication factor, or
 // a tracked configuration key that is missing or has another value. Attributes
 // that are null in state (for example right after an import) are not compared.
-func topicUnsettled(info admin.TopicInfo, state *TopicResourceModel) bool {
+func topicUnsettled(info kafkaclient.TopicInfo, state *TopicResourceModel) bool {
 	if !state.Partitions.IsNull() && !state.Partitions.IsUnknown() &&
 		int64(len(info.Partitions)) != state.Partitions.ValueInt64() {
 		return true
@@ -47,7 +48,7 @@ func topicUnsettled(info admin.TopicInfo, state *TopicResourceModel) bool {
 	if !state.ReplicationFactor.IsNull() && !state.ReplicationFactor.IsUnknown() {
 		// Replicas differing between partitions means a reassignment is still
 		// in progress, which is also not settled.
-		factor, err := replicaCount(info)
+		factor, err := kafkaclientReplicaCount(info)
 		if err != nil || int64(factor) != state.ReplicationFactor.ValueInt64() {
 			return true
 		}
@@ -65,8 +66,8 @@ func topicUnsettled(info admin.TopicInfo, state *TopicResourceModel) bool {
 // report it as drift. Waiting after the write cannot fix that, because the next
 // request can still reach a lagging broker, so Read retries instead. A change
 // made outside Terraform costs the full window once, then is reported as drift.
-func (r *topicResource) readTopicSettled(ctx context.Context, topic string, state *TopicResourceModel) (admin.TopicInfo, error) {
-	info, err := r.client.GetTopic(ctx, topic, true)
+func (r *topicResource) readTopicSettled(ctx context.Context, topic string, state *TopicResourceModel) (kafkaclient.TopicInfo, error) {
+	info, err := r.kafka.Topic(ctx, topic)
 	if err != nil || !topicUnsettled(info, state) {
 		return info, err
 	}
@@ -74,7 +75,7 @@ func (r *topicResource) readTopicSettled(ctx context.Context, topic string, stat
 	waitCtx, cancel := context.WithTimeout(ctx, readSettleWindow)
 	defer cancel()
 	err = pollUntil(waitCtx, readSettleInterval, func(ctx context.Context) (bool, error) {
-		latest, err := r.client.GetTopic(ctx, topic, true)
+		latest, err := r.kafka.Topic(ctx, topic)
 		if err != nil {
 			return false, err
 		}

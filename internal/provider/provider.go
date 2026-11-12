@@ -344,6 +344,7 @@ func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (admin.SASLConf
 func (p *kafkaProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewTopicResource,
+		NewACLResource,
 		NewQuotaResource,
 	}
 }

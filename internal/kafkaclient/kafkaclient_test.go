@@ -212,9 +212,7 @@ type fakeRoundTripper struct {
 
 func (f *fakeRoundTripper) RoundTrip(_ context.Context, _ net.Addr, req kafka.Request) (kafka.Response, error) {
 	m := req.(*metadata.Request)
-	for _, topic := range m.TopicNames {
-		f.gotTopics = append(f.gotTopics, topic)
-	}
+	f.gotTopics = append(f.gotTopics, m.TopicNames...)
 	return &metadata.Response{Brokers: []metadata.ResponseBroker{{NodeID: 1, Host: "h", Port: 9092}}}, nil
 }
 
@@ -235,8 +233,8 @@ func TestReadOnlyViewReadsThroughSameClient(t *testing.T) {
 // read-only view may only expose methods that Reader (the read side) has,
 // and Reader must not grow methods that look like writes.
 func TestReadOnlyClientHasNoMutatingMethods(t *testing.T) {
-	readerMethods := methodNames(reflect.TypeOf(&Reader{}))
-	for _, name := range methodNames(reflect.TypeOf(&ReadOnlyClient{})) {
+	readerMethods := methodNames(reflect.TypeFor[*Reader]())
+	for _, name := range methodNames(reflect.TypeFor[*ReadOnlyClient]()) {
 		require.Contains(t, readerMethods, name, "ReadOnlyClient.%s is not a Reader method", name)
 	}
 	for _, name := range readerMethods {
@@ -244,7 +242,7 @@ func TestReadOnlyClientHasNoMutatingMethods(t *testing.T) {
 			assert.Falsef(t, strings.HasPrefix(name, prefix), "Reader.%s looks mutating; put it on Client", name)
 		}
 	}
-	_, hasClose := reflect.TypeOf(&ReadOnlyClient{}).MethodByName("Close")
+	_, hasClose := reflect.TypeFor[*ReadOnlyClient]().MethodByName("Close")
 	assert.False(t, hasClose, "ReadOnlyClient must not own the transport lifecycle")
 }
 

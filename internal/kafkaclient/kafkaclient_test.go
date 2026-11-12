@@ -259,3 +259,13 @@ func TestNewTransport_MetadataTTL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2*time.Second, transport.MetadataTTL)
 }
+
+func TestReaderTimeout(t *testing.T) {
+	c, err := New(t.Context(), Config{BootstrapServer: "localhost:9092", Timeout: 7 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Timeout(); got != 7*time.Second {
+		t.Errorf("Timeout() = %v, want 7s", got)
+	}
+}

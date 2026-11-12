@@ -18,7 +18,10 @@ import (
 
 // Run the docs generation tool, check its repository for more information on how it works and how docs
 // can be customized.
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs
+//
+// The provider names are passed explicitly because the tool otherwise derives them from the name of
+// the checkout directory, which fails in git worktrees and in clones with a different directory name.
+//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-name kafka --rendered-provider-name terraform-provider-kafka
 
 var (
 	// these will be set by the goreleaser configuration

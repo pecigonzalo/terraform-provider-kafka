@@ -219,9 +219,10 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
 		return
 	}
+	// The topic exists now, so a failure to read it back must not stop the state
+	// from being saved: the next Read reports whatever is wrong.
 	if err := r.waitForTopicVisible(ctx, data.Name.ValueString()); err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Topic was created but could not be read back, got error: %s", err))
-		return
+		tflog.Warn(ctx, fmt.Sprintf("Created topic %s but could not read it back: %s", data.Name.ValueString(), err))
 	}
 	data.ID = data.Name
 	tflog.Trace(ctx, "Created topic")

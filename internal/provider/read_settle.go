@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -56,14 +57,12 @@ func topicUnsettled(info kafkaclient.TopicInfo, state *TopicResourceModel) bool 
 	return !state.Config.IsNull() && configUnsettled(state.Config, info.Config)
 }
 
-// minAbsentChecks is how many consecutive "topic not found" answers, spread
-// over the settle window, it takes before a topic is reported as gone. Fewer
-// than that is treated as a lagging broker, not a deletion.
-const minAbsentChecks = 5
-
-// minVisibleChecks is how many consecutive reads must find a newly created
-// topic before the create is considered settled.
-const minVisibleChecks = 3
+// minAbsentChecks is how many consecutive "topic not found" answers it takes
+// before a topic is reported as gone. Fewer than that is treated as a lagging
+// broker, not a deletion. With readSettleInterval between checks this is about
+// two seconds, which is also how long a topic deleted outside Terraform takes
+// to be noticed.
+const minAbsentChecks = 8
 
 // readTopicSettled returns the topic, re-reading for a short while if it
 // disagrees with state (see topicUnsettled) or is reported as not found.
@@ -79,9 +78,11 @@ const minVisibleChecks = 3
 // can still reach a lagging broker, so Read retries instead.
 //
 // A change made outside Terraform costs the full window once, then is reported
-// as drift. A topic deleted outside Terraform is only reported as gone after
-// being absent for minAbsentChecks consecutive checks, so it also takes the
-// full window to be noticed.
+// as drift. A topic is reported as gone (an error wrapping
+// kafkaclient.ErrTopicNotFound) only after minAbsentChecks consecutive
+// not-found answers within the window. If the window ends before that many
+// checks, for example because the cluster is slow, the error does not wrap
+// ErrTopicNotFound, so the resource is kept in state instead of being dropped.
 func (r *topicResource) readTopicSettled(ctx context.Context, topic string, state *TopicResourceModel) (kafkaclient.TopicInfo, error) {
 	return settleTopicRead(ctx, func(ctx context.Context) (kafkaclient.TopicInfo, error) {
 		return r.kafka.Topic(ctx, topic)
@@ -96,58 +97,59 @@ func settleTopicRead(
 	state *TopicResourceModel,
 	interval, window time.Duration,
 ) (kafkaclient.TopicInfo, error) {
-	info, err := read(ctx)
-	if err == nil && !topicUnsettled(info, state) {
-		return info, nil
-	}
-	if err != nil && !errors.Is(err, kafkaclient.ErrTopicNotFound) {
-		return info, err
-	}
-
 	var (
-		last   kafkaclient.TopicInfo // latest topic that was found
-		found  bool
-		absent int // consecutive not-found answers, including the first read
-		notErr error
+		last    kafkaclient.TopicInfo // latest topic that was found
+		found   bool
+		absent  int // consecutive not-found answers
+		lastErr error
 	)
-	observe := func(info kafkaclient.TopicInfo, err error) {
-		if err != nil {
+	// check reads once and reports whether to stop: the topic matches state, or
+	// it has been absent often enough to be considered gone.
+	check := func(ctx context.Context) (bool, error) {
+		info, err := read(ctx)
+		switch {
+		case errors.Is(err, kafkaclient.ErrTopicNotFound):
 			absent++
-			notErr = err
-			return
+			lastErr = err
+			return absent >= minAbsentChecks, nil
+		case err != nil:
+			return false, err
 		}
 		absent = 0
 		last, found = info, true
+		return !topicUnsettled(info, state), nil
 	}
-	observe(info, err)
+
+	if done, err := check(ctx); err != nil || done && found {
+		return last, err
+	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
-	pollErr := pollUntil(waitCtx, interval, func(ctx context.Context) (bool, error) {
-		info, err := read(ctx)
-		if err != nil && !errors.Is(err, kafkaclient.ErrTopicNotFound) {
-			return false, err
-		}
-		observe(info, err)
-		return err == nil && !topicUnsettled(info, state), nil
-	})
+	pollErr := pollUntil(waitCtx, interval, check)
 	// Running out of time is expected for a change that really happened: report
 	// what the broker said last.
 	if pollErr != nil && !errors.Is(pollErr, context.DeadlineExceeded) {
 		return last, pollErr
 	}
-	if absent >= minAbsentChecks || !found {
-		return kafkaclient.TopicInfo{}, notErr
+	switch {
+	case absent >= minAbsentChecks:
+		return kafkaclient.TopicInfo{}, lastErr
+	case found:
+		return last, nil
+	default:
+		// Deliberately not wrapping lastErr: matching ErrTopicNotFound would drop the resource.
+		msg := fmt.Sprintf("topic not found, but the settle window ended after %d check(s) so it is not treated as deleted: %s",
+			absent, lastErr.Error())
+		return kafkaclient.TopicInfo{}, errors.New(msg)
 	}
-	return last, nil
 }
 
-// waitForTopicVisible waits until a just-created topic can be read back
-// minVisibleChecks times in a row. Creating a topic returns once the
-// controller accepted it, but the broker that answers the next metadata
-// request, or the client's cached metadata, can still predate it and report it
-// as not found. A single sighting is not enough either, because a later
-// background metadata refresh can replace the cache with an older view.
+// waitForTopicVisible waits until a just-created topic can be read back.
+// Creating a topic returns once the controller accepted it, but the broker that
+// answers the next metadata request, or the client's cached metadata, can still
+// predate it and report it as not found. Read retries a missing topic as well,
+// so this only keeps the common case quick and does not need to prove stability.
 //
 // Running out of the settle window is not an error: the topic was created, so
 // the apply succeeds and a later Read reports whatever the cluster says then.
@@ -161,18 +163,12 @@ func (r *topicResource) waitForTopicVisible(ctx context.Context, topic string) e
 func waitForVisible(ctx context.Context, read func(context.Context) error, interval, window time.Duration) error {
 	waitCtx, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
-	visible := 0
 	err := pollUntil(waitCtx, interval, func(ctx context.Context) (bool, error) {
 		err := read(ctx)
 		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
-			visible = 0
 			return false, nil
 		}
-		if err != nil {
-			return false, err
-		}
-		visible++
-		return visible >= minVisibleChecks, nil
+		return err == nil, err
 	})
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return err

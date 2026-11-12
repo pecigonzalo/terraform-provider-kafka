@@ -130,7 +130,6 @@ func TestSettleTopicRead(t *testing.T) {
 	}{
 		{"found_at_once", []error{nil}, true, nil},
 		{"absent_briefly_then_present", []error{gone, gone, nil}, true, nil},
-		{"present_then_absent_once_then_present", []error{nil, gone, nil}, true, nil},
 		{"other_error_is_returned", []error{boom}, false, boom},
 		{"other_error_after_absence_is_returned", []error{gone, boom}, false, boom},
 	}
@@ -154,6 +153,41 @@ func TestSettleTopicRead(t *testing.T) {
 		require.GreaterOrEqual(t, s.calls, minAbsentChecks, "must check several times before reporting a deletion")
 	})
 
+	t.Run("visible_then_absent_then_settled", func(t *testing.T) {
+		// A stale refresh makes the topic vanish between two sightings: the first
+		// shows the old partition count, then it is missing, then it settles.
+		partitions := func(n int) kafkaclient.TopicInfo {
+			info := kafkaclient.TopicInfo{Name: "t"}
+			for i := range n {
+				info.Partitions = append(info.Partitions, kafkaclient.PartitionInfo{ID: i, Replicas: []int{1}})
+			}
+			return info
+		}
+		replies := []struct {
+			info kafkaclient.TopicInfo
+			err  error
+		}{{partitions(2), nil}, {kafkaclient.TopicInfo{}, gone}, {partitions(1), nil}}
+		calls := 0
+		read := func(context.Context) (kafkaclient.TopicInfo, error) {
+			r := replies[min(calls, len(replies)-1)]
+			calls++
+			return r.info, r.err
+		}
+		info, err := settleTopicRead(t.Context(), read, state, interval, window)
+		require.NoError(t, err)
+		require.Len(t, info.Partitions, 1)
+		require.Equal(t, len(replies), calls)
+	})
+
+	t.Run("window_ending_early_is_not_a_deletion", func(t *testing.T) {
+		// A zero window ends before any retry, as on a cluster slow enough that
+		// only one check fits: one not-found answer must not drop the resource.
+		s := &scriptedTopicReads{results: []error{gone}}
+		_, err := settleTopicRead(t.Context(), s.read, state, interval, 0)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, kafkaclient.ErrTopicNotFound)
+	})
+
 	t.Run("isolated_absences_while_unsettled_are_not_a_deletion", func(t *testing.T) {
 		// The topic never settles against state (partitions differ), so Read polls
 		// until the window ends. Absences never come five in a row, so it is not gone.
@@ -169,9 +203,8 @@ func TestWaitForVisible(t *testing.T) {
 	gone := fmt.Errorf("topic: %w", kafkaclient.ErrTopicNotFound)
 	boom := errors.New("boom")
 
-	t.Run("requires_consecutive_sightings", func(t *testing.T) {
-		// found, found, absent, then found for good: needs three in a row after the gap.
-		results := []error{nil, nil, gone, nil, nil, nil}
+	t.Run("returns_at_first_sighting", func(t *testing.T) {
+		results := []error{gone, gone, nil, gone}
 		calls := 0
 		err := waitForVisible(t.Context(), func(context.Context) error {
 			r := results[min(calls, len(results)-1)]
@@ -179,7 +212,7 @@ func TestWaitForVisible(t *testing.T) {
 			return r
 		}, time.Millisecond, 2*time.Second)
 		require.NoError(t, err)
-		require.Equal(t, len(results), calls)
+		require.Equal(t, 3, calls)
 	})
 	t.Run("never_visible_is_not_an_error", func(t *testing.T) {
 		err := waitForVisible(t.Context(), func(context.Context) error { return gone }, time.Millisecond, 20*time.Millisecond)

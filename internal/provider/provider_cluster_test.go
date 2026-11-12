@@ -6,10 +6,12 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	dockertest "github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"
 	kafka "github.com/segmentio/kafka-go"
+	"github.com/stretchr/testify/require"
 )
 
 // clusterBrokers is the number of brokers the acceptance tests run against.
@@ -129,9 +131,78 @@ func runCluster(m *testing.M, pool *dockertest.Pool, networkID, suffix string, n
 		return 1
 	}
 
+	// Topic creation goes through the controller, but each broker serves metadata
+	// from its own cache, which is updated asynchronously. The provider only
+	// bootstraps from the first address, so make sure every broker already knows
+	// the topic and its leader before any test reads it.
+	for _, address := range addresses {
+		if err := pool.Retry(func() error { return topicVisible(address, existingTopic) }); err != nil {
+			log.Printf("test topic %q is not visible on broker %s: %s", existingTopic, address, err)
+			return 1
+		}
+	}
+
 	if err := os.Setenv("KAFKA_BOOTSTRAP_SERVERS", strings.Join(addresses, ",")); err != nil {
 		log.Printf("Could not set bootstrap servers: %s", err)
 		return 1
 	}
 	return m.Run()
+}
+
+// topicVisible returns an error unless the broker at address reports every
+// partition of topic with an elected leader.
+func topicVisible(address, topic string) error {
+	conn, err := kafka.Dial("tcp", address)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	partitions, err := conn.ReadPartitions(topic)
+	if err != nil {
+		return err
+	}
+	if len(partitions) == 0 {
+		return fmt.Errorf("no partitions reported for topic %q", topic)
+	}
+	for _, p := range partitions {
+		if p.Leader.Host == "" {
+			return fmt.Errorf("partition %d of topic %q has no leader", p.ID, topic)
+		}
+	}
+	return nil
+}
+
+// waitForTopicConfig fails the test unless every broker in
+// KAFKA_BOOTSTRAP_SERVERS reports value for the topic configuration key.
+//
+// A topic data source has no expected value to settle against, and the client
+// may talk to a different broker on each request, so a data source read right
+// after the topic was written can reach a broker that has not applied the
+// change yet. Tests that read such a topic call this from PreConfig first.
+func waitForTopicConfig(t *testing.T, topic, key, value string) {
+	t.Helper()
+
+	for address := range strings.SplitSeq(os.Getenv("KAFKA_BOOTSTRAP_SERVERS"), ",") {
+		client := &kafka.Client{Addr: kafka.TCP(address), Timeout: 10 * time.Second}
+		require.Eventually(t, func() bool {
+			resp, err := client.DescribeConfigs(t.Context(), &kafka.DescribeConfigsRequest{
+				Resources: []kafka.DescribeConfigRequestResource{{
+					ResourceType: kafka.ResourceTypeTopic,
+					ResourceName: topic,
+					ConfigNames:  []string{key},
+				}},
+			})
+			if err != nil || len(resp.Resources) != 1 || resp.Resources[0].Error != nil {
+				return false
+			}
+			for _, entry := range resp.Resources[0].ConfigEntries {
+				if entry.ConfigName == key && entry.ConfigValue == value {
+					return true
+				}
+			}
+			return false
+		}, 30*time.Second, 200*time.Millisecond,
+			"broker %s does not report %s=%s for topic %q", address, key, value, topic)
+	}
 }

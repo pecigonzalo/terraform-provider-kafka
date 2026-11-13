@@ -27,9 +27,10 @@ const (
 	// is visible.
 	aclSettleInterval = 250 * time.Millisecond
 
-	// aclSettleTimeout bounds how long Create and Delete wait for a change to
-	// become visible on the broker that answers describe requests.
-	aclSettleTimeout = 30 * time.Second
+	// aclDefaultTimeout bounds how long Create and Delete wait for a change to
+	// become visible when the client has no timeout configured. Normally the
+	// provider timeout is used, see aclResource.settleTimeout.
+	aclDefaultTimeout = 5 * time.Minute
 
 	// aclReadSettleWindow bounds how long Read keeps re-describing an ACL that
 	// is missing before it is reported as gone.
@@ -52,6 +53,7 @@ var (
 
 // aclAPI is the part of the Kafka client the ACL resource uses.
 type aclAPI interface {
+	Timeout() time.Duration
 	CreateACL(ctx context.Context, acl kafkaclient.ACL) error
 	DescribeACLs(ctx context.Context, filter kafkaclient.ACLFilter) ([]kafkaclient.ACL, error)
 	DeleteACLs(ctx context.Context, filter kafkaclient.ACLFilter) (int, error)
@@ -61,7 +63,6 @@ type aclAPI interface {
 func NewACLResource() resource.Resource {
 	return &aclResource{
 		settleInterval: aclSettleInterval,
-		settleTimeout:  aclSettleTimeout,
 		readWindow:     aclReadSettleWindow,
 	}
 }
@@ -70,10 +71,20 @@ type aclResource struct {
 	client aclAPI
 
 	// Timings for waiting until ACL changes are visible. They are fields so
-	// tests can shorten them.
+	// tests can shorten them. Writes wait up to the client's timeout (the
+	// provider timeout) instead of a fixed bound, see settleTimeout.
 	settleInterval time.Duration
-	settleTimeout  time.Duration
 	readWindow     time.Duration
+}
+
+// settleTimeout bounds how long Create and Delete wait for a change to become
+// visible on the broker that answers describe requests: the provider timeout,
+// or aclDefaultTimeout when none is configured.
+func (r *aclResource) settleTimeout() time.Duration {
+	if t := r.client.Timeout(); t > 0 {
+		return t
+	}
+	return aclDefaultTimeout
 }
 
 // ACLResourceModel describes the kafka_acl resource data model.
@@ -228,7 +239,7 @@ func (r *aclResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	if err := r.waitForACL(ctx, acl, true, r.settleTimeout); err != nil {
+	if err := r.waitForACL(ctx, acl, true, r.settleTimeout()); err != nil {
 		addACLError(&resp.Diagnostics, "ACL created but not visible yet", err)
 	}
 }
@@ -280,7 +291,7 @@ func (r *aclResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 		addACLError(&resp.Diagnostics, "Unable to delete ACL", err)
 		return
 	}
-	if err := r.waitForACL(ctx, acl, false, r.settleTimeout); err != nil {
+	if err := r.waitForACL(ctx, acl, false, r.settleTimeout()); err != nil {
 		addACLError(&resp.Diagnostics, "ACL deleted but still visible", err)
 	}
 }

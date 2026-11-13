@@ -13,8 +13,11 @@ import (
 	"time"
 
 	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	fwresourceschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/stretchr/testify/assert"
@@ -212,15 +215,22 @@ type fakeACLAPI struct {
 	describes   int
 	created     []kafkaclient.ACL
 	deleted     []kafkaclient.ACLFilter
+	timeout     time.Duration
+	hidden      bool // created ACLs never become visible, deleted ones never go
 }
+
+func (f *fakeACLAPI) Timeout() time.Duration { return f.timeout }
 
 func (f *fakeACLAPI) CreateACL(_ context.Context, acl kafkaclient.ACL) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.before = slices.Clone(f.acls)
 	f.pending = f.lag
-	f.acls = append(f.acls, acl)
 	f.created = append(f.created, acl)
+	if f.hidden {
+		return nil
+	}
+	f.acls = append(f.acls, acl)
 	return nil
 }
 
@@ -251,6 +261,9 @@ func (f *fakeACLAPI) DeleteACLs(_ context.Context, filter kafkaclient.ACLFilter)
 	f.before = slices.Clone(f.acls)
 	f.pending = f.lag
 	f.deleted = append(f.deleted, filter)
+	if f.hidden {
+		return 0, nil
+	}
 	n := 0
 	f.acls = slices.DeleteFunc(f.acls, func(a kafkaclient.ACL) bool {
 		if exactACLFilter(a) == filter {
@@ -263,7 +276,7 @@ func (f *fakeACLAPI) DeleteACLs(_ context.Context, filter kafkaclient.ACLFilter)
 }
 
 func newTestACLResource(api aclAPI) *aclResource {
-	return &aclResource{client: api, settleInterval: time.Millisecond, settleTimeout: 2 * time.Second, readWindow: 50 * time.Millisecond}
+	return &aclResource{client: api, settleInterval: time.Millisecond, readWindow: 50 * time.Millisecond}
 }
 
 func TestWaitForACL(t *testing.T) {
@@ -316,6 +329,111 @@ func TestWaitForACL(t *testing.T) {
 		err := newTestACLResource(&fakeACLAPI{}).waitForACL(ctx, testACL(), true, time.Second)
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.NotErrorIs(t, err, errACLNotSettled)
+	})
+}
+
+func TestACLSettleTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{"uses_provider_timeout", 42 * time.Second, 42 * time.Second},
+		{"unset_uses_default", 0, aclDefaultTimeout},
+		{"negative_uses_default", -time.Second, aclDefaultTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestACLResource(&fakeACLAPI{timeout: tc.timeout})
+			assert.Equal(t, tc.want, r.settleTimeout())
+		})
+	}
+}
+
+// aclModelObject builds the object value of the resource model for acl.
+func aclModelObject(t *testing.T, r *aclResource, acl kafkaclient.ACL) tftypes.Value {
+	t.Helper()
+	return tftypes.NewValue(aclTFType(t, r), map[string]tftypes.Value{
+		"id":                    tftypes.NewValue(tftypes.String, encodeACLID(acl)),
+		"resource_type":         tftypes.NewValue(tftypes.String, string(acl.ResourceType)),
+		"resource_name":         tftypes.NewValue(tftypes.String, acl.ResourceName),
+		"resource_pattern_type": tftypes.NewValue(tftypes.String, string(acl.PatternType)),
+		"principal":             tftypes.NewValue(tftypes.String, acl.Principal),
+		"host":                  tftypes.NewValue(tftypes.String, acl.Host),
+		"operation":             tftypes.NewValue(tftypes.String, string(acl.Operation)),
+		"permission_type":       tftypes.NewValue(tftypes.String, string(acl.PermissionType)),
+	})
+}
+
+func aclTFType(t *testing.T, r *aclResource) tftypes.Type {
+	t.Helper()
+	resp := &fwresource.SchemaResponse{}
+	r.Schema(t.Context(), fwresource.SchemaRequest{}, resp)
+	return resp.Schema.Type().TerraformType(t.Context())
+}
+
+func aclSchema(t *testing.T, r *aclResource) fwresourceschema.Schema {
+	t.Helper()
+	resp := &fwresource.SchemaResponse{}
+	r.Schema(t.Context(), fwresource.SchemaRequest{}, resp)
+	return resp.Schema
+}
+
+// TestACLWritesWaitUpToProviderTimeout shows Create and Delete are bounded by
+// the client timeout: with a change that never becomes visible they stop after
+// that timeout with advice to apply again.
+func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		api := &fakeACLAPI{hidden: true, timeout: 30 * time.Millisecond}
+		r := newTestACLResource(api)
+		sch := aclSchema(t, r)
+		plan := tfsdk.Plan{Schema: sch, Raw: aclModelObject(t, r, testACL())}
+		resp := &fwresource.CreateResponse{State: tfsdk.State{Schema: sch}}
+		r.Create(t.Context(), fwresource.CreateRequest{Plan: plan}, resp)
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "apply again")
+		assert.Greater(t, api.describes, 1, "describe was retried until the timeout")
+		assert.False(t, resp.State.Raw.IsNull(), "state is saved before waiting")
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		api := &fakeACLAPI{hidden: true, timeout: 30 * time.Millisecond, acls: []kafkaclient.ACL{testACL()}}
+		r := newTestACLResource(api)
+		sch := aclSchema(t, r)
+		state := tfsdk.State{Schema: sch, Raw: aclModelObject(t, r, testACL())}
+		resp := &fwresource.DeleteResponse{State: state}
+		r.Delete(t.Context(), fwresource.DeleteRequest{State: state}, resp)
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "apply again")
+		assert.Greater(t, api.describes, 1)
+	})
+
+	t.Run("create_succeeds_when_visible", func(t *testing.T) {
+		api := &fakeACLAPI{lag: 3, timeout: 2 * time.Second}
+		r := newTestACLResource(api)
+		sch := aclSchema(t, r)
+		plan := tfsdk.Plan{Schema: sch, Raw: aclModelObject(t, r, testACL())}
+		resp := &fwresource.CreateResponse{State: tfsdk.State{Schema: sch}}
+		r.Create(t.Context(), fwresource.CreateRequest{Plan: plan}, resp)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 4, api.describes)
+	})
+
+	t.Run("cancelled_context_is_not_advice_to_apply_again", func(t *testing.T) {
+		api := &fakeACLAPI{hidden: true, timeout: time.Minute}
+		r := newTestACLResource(api)
+		sch := aclSchema(t, r)
+		plan := tfsdk.Plan{Schema: sch, Raw: aclModelObject(t, r, testACL())}
+		resp := &fwresource.CreateResponse{State: tfsdk.State{Schema: sch}}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		r.Create(ctx, fwresource.CreateRequest{Plan: plan}, resp)
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.NotContains(t, resp.Diagnostics.Errors()[0].Detail(), "apply again")
 	})
 }
 

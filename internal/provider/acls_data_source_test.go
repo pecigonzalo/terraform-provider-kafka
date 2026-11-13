@@ -94,7 +94,10 @@ func TestACLsDataSourceValidateConfig(t *testing.T) {
 		{"cluster_with_other_name", map[string]*string{"resource_type": strPtr("cluster"), "resource_name": strPtr("x")}, "must be"},
 		{"prefixed_wildcard", map[string]*string{"resource_pattern_type": strPtr("prefixed"), "resource_name": strPtr("*")}, "wildcard"},
 		{"malformed_principal", map[string]*string{"principal": strPtr("alice")}, "Type:name"},
-		{"wildcard_inside_host", map[string]*string{"host": strPtr("10.*")}, "wildcard"},
+		{"wildcard_inside_host", map[string]*string{"host": strPtr("10.*")}, "does not support network ranges"},
+		{"network_range_host", map[string]*string{"host": strPtr("10.0.0.0/8")}, "does not support network ranges"},
+		{"ip_host", map[string]*string{"host": strPtr("2001:db8::1")}, ""},
+		{"wrong_case_principal_type", map[string]*string{"principal": strPtr("user:alice")}, `write "User:alice"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

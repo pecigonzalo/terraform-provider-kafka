@@ -145,13 +145,17 @@ func (r *aclResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"principal": schema.StringAttribute{
 				MarkdownDescription: "Principal the ACL applies to, as `Type:name`, for example `User:alice`. " +
-					"`User:*` matches every user.",
+					"`User:*` matches every user. " +
+					"Write the type `User` with this exact case, because Kafka compares the type with exact case. " +
+					"Other types are valid, because Kafka allows custom principal types.",
 				Required:      true,
 				PlanModifiers: replace,
 			},
 			"host": schema.StringAttribute{
-				MarkdownDescription: "Host the principal is allowed or denied access from. `*` (the default) " +
-					"matches every host.",
+				MarkdownDescription: "Host the principal is allowed or denied access from. " +
+					"Use `*` (the default) for every host, or one IP address (IPv4 or IPv6). " +
+					"Kafka matches hosts exactly. It does not support network ranges, such as `10.0.0.0/8`, " +
+					"or host names.",
 				Optional:      true,
 				Computed:      true,
 				Default:       stringdefault.StaticString("*"),

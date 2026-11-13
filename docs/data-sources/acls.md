@@ -46,10 +46,10 @@ output "alice_read_acl_ids" {
 
 ### Optional
 
-- `host` (String) Return only ACLs for this host. The host must be the same. `*` returns only ACLs for all hosts.
+- `host` (String) Return only ACLs for this host. The host must be the same. `*` returns only ACLs for all hosts. The value must be `*` or one IP address (IPv4 or IPv6). Kafka matches hosts exactly. It does not support network ranges, such as `10.0.0.0/8`, or host names.
 - `operation` (String) Return only ACLs for this operation: `any` or `all`, `read`, `write`, `create`, `delete`, `alter`, `describe`, `cluster_action`, `describe_configs`, `alter_configs`, `idempotent_write`. `any` is the same as no value.
 - `permission_type` (String) Return only ACLs that `allow` or `deny`, or `any` of them. `any` is the same as no value.
-- `principal` (String) Return only ACLs for this principal, as `Type:name`, for example `User:alice`. The principal must be the same. `User:*` returns only ACLs for all users.
+- `principal` (String) Return only ACLs for this principal, as `Type:name`, for example `User:alice`. The principal must be the same. `User:*` returns only ACLs for all users. Write the type `User` with this exact case, because Kafka compares the type with exact case.
 - `resource_name` (String) Return only ACLs for the resource with this name, for example a topic name. With the `literal` pattern type, the name must be the same. ACLs for the `*` name are only in the result if you set `*`. With the `match` pattern type, the result also has the wildcard and prefixed ACLs that apply to the name.
 - `resource_pattern_type` (String) The kind of ACL that `resource_name` selects. `literal`: ACLs for exactly that name. `prefixed`: ACLs for exactly that prefix. `match`: all ACLs that apply to the name, with wildcard and prefixed ACLs. `any`: literal and prefixed ACLs with that name. You can use `match` and `any` only in filters, not in `kafka_acl`. No value is the same as `any`.
 - `resource_type` (String) Return only ACLs for this type of resource: `any` or `topic`, `group`, `cluster`, `transactional_id`, `delegation_token`. `any` is the same as no value.

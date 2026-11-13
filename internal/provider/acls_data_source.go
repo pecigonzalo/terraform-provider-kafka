@@ -98,13 +98,16 @@ func (d *aclsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 			},
 			"principal": schema.StringAttribute{
 				MarkdownDescription: "Return only ACLs for this principal, as `Type:name`, for example `User:alice`. " +
-					"The principal must be the same. `User:*` returns only ACLs for all users.",
+					"The principal must be the same. `User:*` returns only ACLs for all users. " +
+					"Write the type `User` with this exact case, because Kafka compares the type with exact case.",
 				Optional:   true,
 				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
 			},
 			"host": schema.StringAttribute{
 				MarkdownDescription: "Return only ACLs for this host. " +
-					"The host must be the same. `*` returns only ACLs for all hosts.",
+					"The host must be the same. `*` returns only ACLs for all hosts. " +
+					"The value must be `*` or one IP address (IPv4 or IPv6). " +
+					"Kafka matches hosts exactly. It does not support network ranges, such as `10.0.0.0/8`, or host names.",
 				Optional:   true,
 				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
 			},

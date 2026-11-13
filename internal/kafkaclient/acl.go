@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 
@@ -264,8 +265,9 @@ var validOperations = map[ACLResourceType][]ACLOperation{
 //
 //   - every enum must be a concrete value (no any/match);
 //   - resource name, principal and host must be non-empty;
-//   - principal must have the form "Type:name" with both parts non-empty;
-//   - host must be "*" or contain no '*';
+//   - principal must have the form "Type:name" with both parts non-empty, and
+//     the type "User" must be written with that exact case;
+//   - host must be "*" or an IP address;
 //   - the cluster resource requires name [ClusterResourceName] and a literal pattern;
 //   - a prefixed pattern cannot use the wildcard name "*";
 //   - the operation must be supported by the resource type.
@@ -321,6 +323,10 @@ func joinStrings[T ~string](vs []T) string {
 	return strings.Join(ss, ", ")
 }
 
+// validatePrincipal checks that p has the form "Type:name" with a type and a
+// name. Kafka compares the type with exact case, and the type "User" is the
+// one every broker knows, so another case of "user" is an error. Other types
+// are valid, because Kafka allows custom principal types.
 func validatePrincipal(p string) error {
 	if p == "" {
 		return fmt.Errorf("%w: principal must not be empty", ErrInvalidACL)
@@ -329,17 +335,26 @@ func validatePrincipal(p string) error {
 	if !ok || typ == "" || name == "" {
 		return fmt.Errorf(`%w: principal %q must have the form "Type:name", e.g. "User:alice"`, ErrInvalidACL, p)
 	}
+	if typ != "User" && strings.EqualFold(typ, "user") {
+		return fmt.Errorf(`%w: principal %q has the type %q. Kafka compares the type with exact case, so write "User:%s"`,
+			ErrInvalidACL, p, typ, name)
+	}
 	return nil
 }
 
+// validateHost checks that h is "*" or an IP address. Kafka matches the host
+// of an ACL exactly. It does not support host names, partial wildcards or
+// network ranges, so an ACL with such a value never matches any client.
 func validateHost(h string) error {
 	if h == "" {
 		return fmt.Errorf(`%w: host must not be empty (use "*" for all hosts)`, ErrInvalidACL)
 	}
-	if h != "*" && strings.Contains(h, "*") {
-		return fmt.Errorf(`%w: host %q: the wildcard "*" is only allowed as the whole host`, ErrInvalidACL, h)
+	if h == "*" || net.ParseIP(h) != nil {
+		return nil
 	}
-	return nil
+	return fmt.Errorf(`%w: host %q must be "*" or an IP address. Kafka matches hosts exactly. `+
+		`It does not support network ranges (such as 10.0.0.0/8), partial wildcards or host names`,
+		ErrInvalidACL, h)
 }
 
 // isMatchAll reports whether the filter has no restriction at all.

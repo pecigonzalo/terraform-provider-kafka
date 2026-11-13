@@ -116,6 +116,90 @@ func waitForQuotaValues(t *testing.T, id string, want kafkaclient.QuotaValues) {
 	}
 }
 
+// testAccQuotaClient returns a client for the first broker in
+// KAFKA_BOOTSTRAP_SERVERS, for changes made outside Terraform.
+func testAccQuotaClient(t *testing.T) *kafkaclient.Client {
+	t.Helper()
+	address, _, _ := strings.Cut(os.Getenv("KAFKA_BOOTSTRAP_SERVERS"), ",")
+	client, err := kafkaclient.New(t.Context(), kafkaclient.Config{BootstrapServer: address, Timeout: 10 * time.Second})
+	require.NoError(t, err)
+	return client
+}
+
+// TestAccQuotaResourceDeletedOutsideTerraform checks that a quota removed
+// outside Terraform is noticed and created again.
+func TestAccQuotaResourceDeletedOutsideTerraform(t *testing.T) {
+	user := testAccQuotaName(t, "gone")
+	id := "user=" + user + ",client-id=app"
+	config := testAccQuotaConfig(user, "  producer_byte_rate = 1048576\n")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckQuotaGone(id),
+		Steps: []resource.TestStep{
+			{Config: config},
+			// Remove the quota behind Terraform's back: the refresh must drop it
+			// from state and the plan must create it again.
+			{
+				PreConfig: func() {
+					entity, err := decodeQuotaID(id)
+					require.NoError(t, err)
+					require.NoError(t, testAccQuotaClient(t).AlterQuotas(t.Context(), entity, nil,
+						[]string{string(kafkaclient.QuotaProducerByteRate)}))
+					require.NoError(t, testAccQuotaAbsent(id))
+				},
+				Config: config,
+				Check:  resource.TestCheckResourceAttr("kafka_quota.test", "producer_byte_rate", "1048576"),
+			},
+		},
+	})
+}
+
+// TestAccQuotaResourceLimitChangedOutsideTerraform checks that a limit changed
+// outside Terraform is reported as a difference and set back by apply.
+func TestAccQuotaResourceLimitChangedOutsideTerraform(t *testing.T) {
+	user := testAccQuotaName(t, "drift")
+	id := "user=" + user + ",client-id=app"
+	config := testAccQuotaConfig(user, "  producer_byte_rate = 1048576\n")
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckQuotaGone(id),
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				Check:  resource.TestCheckResourceAttr("kafka_quota.test", "producer_byte_rate", "1048576"),
+			},
+			{
+				PreConfig: func() {
+					entity, err := decodeQuotaID(id)
+					require.NoError(t, err)
+					require.NoError(t, testAccQuotaClient(t).AlterQuotas(t.Context(), entity,
+						kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 2097152}, nil))
+					waitForQuotaValues(t, id, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 2097152})
+				},
+				Config:             config,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+			// Apply sets the limit back to the configured value.
+			{
+				Config: config,
+				Check:  resource.TestCheckResourceAttr("kafka_quota.test", "producer_byte_rate", "1048576"),
+			},
+			{
+				PreConfig: func() {
+					waitForQuotaValues(t, id, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 1048576})
+				},
+				Config:   config,
+				PlanOnly: true,
+			},
+		},
+	})
+}
+
 func TestAccQuotaResourceDefaultEntities(t *testing.T) {
 	client := testAccQuotaName(t, "client")
 	id := "client-id=" + client

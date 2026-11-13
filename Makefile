@@ -20,3 +20,18 @@ plan: install
 .PHONY: apply
 apply: install
 	terraform -chdir=./examples/end-to-end/ apply
+
+# Print the changelog entries that are not in a release yet
+.PHONY: changelog-preview
+changelog-preview:
+	./scripts/changelog.sh preview
+
+# Write the section for VERSION at the top of CHANGELOG.md. Example: make changelog-release VERSION=1.0.0
+.PHONY: changelog-release
+changelog-release:
+	./scripts/changelog.sh release $(VERSION)
+
+# Check the format of the files in .changelog
+.PHONY: changelog-check
+changelog-check:
+	./scripts/changelog.sh check

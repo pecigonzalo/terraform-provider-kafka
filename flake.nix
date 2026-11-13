@@ -3,7 +3,8 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11-small";
-    # Newer channel. It only provides the lint and vulnerability tools.
+    # Newer channel. It provides Go and the lint and vulnerability tools. The
+    # older channel has no Go release with the security fixes.
     nixpkgs-tools.url = "github:nixos/nixpkgs/nixos-unstable-small";
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -13,22 +14,11 @@
       let
         pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
         tools = import nixpkgs-tools { inherit system; };
-
-        # The channel has no Go 1.25 release with the security fixes yet.
-        # Remove this override when `go_1_25` in the channel is version
-        # 1.25.14 or newer, or when the module moves to Go 1.26.
-        go = pkgs.go_1_25.overrideAttrs (_: rec {
-          version = "1.25.14";
-          src = pkgs.fetchurl {
-            url = "https://go.dev/dl/go${version}.src.tar.gz";
-            hash = "sha256-noP0T1/ClzeIYbThbMaqEUvordeZP7POssUSOAqk1YI=";
-          };
-        });
       in
       {
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            go
+            tools.go_1_26
             tools.golangci-lint
             tools.govulncheck
           ] ++ (with pkgs; [

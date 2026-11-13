@@ -26,10 +26,10 @@ apply: install
 changelog-preview:
 	./scripts/changelog.sh preview
 
-# Write the section for VERSION at the top of CHANGELOG.md. Example: make changelog-release VERSION=1.0.0
-.PHONY: changelog-release
-changelog-release:
-	./scripts/changelog.sh release $(VERSION)
+# Print the release notes for the commit that is checked out. The release workflow uses this.
+.PHONY: changelog-notes
+changelog-notes:
+	./scripts/changelog.sh notes
 
 # Check the format of the files in .changelog
 .PHONY: changelog-check

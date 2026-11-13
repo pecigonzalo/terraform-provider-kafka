@@ -58,6 +58,9 @@ signs:
       - "--detach-sign"
       - "${artifact}"
 release:
+  # The release notes come from the files in .changelog/. If someone creates the
+  # release on the releases page first, GoReleaser replaces the text of that release.
+  mode: replace
   extra_files:
     - glob: 'terraform-registry-manifest.json'
       name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'

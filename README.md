@@ -122,6 +122,82 @@ Acceptance tests run against a three-broker KRaft cluster, so replication
 factor and partition changes are tested on real replicas. Every run starts its
 own containers on free ports, so runs can execute in parallel.
 
+## Changelog entries
+
+Each pull request that changes what users see adds one file to the directory `.changelog/`. The file name is the number of the pull request, for example `.changelog/154.txt`. A change that only affects the code, the tests or the build needs no file.
+
+The file has one block for each entry. A block has this form:
+
+````markdown
+```release-note:TYPE
+Text of the entry.
+```
+````
+
+Write the text of the entry in the same style as the existing entries. Start with the thing that changes, for example `resource/`kafka_topic`:` or `provider:`. Do not write the pull request number. The build adds it.
+
+Use one of these types:
+
+| Type | Section | Use it for |
+|---|---|---|
+| `breaking-change` | BREAKING CHANGES | A change that can break an existing configuration |
+| `upgrade-note` | UPGRADE NOTES | Steps to do when you upgrade |
+| `new-resource` | FEATURES | A new resource. The build adds `**New Resource:**`. |
+| `new-data-source` | FEATURES | A new data source. The build adds `**New Data Source:**`. |
+| `feature` | FEATURES | Any other new feature |
+| `enhancement` | ENHANCEMENTS | An improvement to a feature that exists |
+| `bug` | BUG FIXES | A fix |
+| `note` | NOTES | Information that is not a change to a feature |
+
+Examples:
+
+````markdown
+```release-note:breaking-change
+provider: `timeout` must be 1 or more. Set a larger value if you used 0.
+```
+
+```release-note:upgrade-note
+resource/`kafka_topic`: Run `terraform plan` after you upgrade.
+```
+
+```release-note:new-resource
+`kafka_quota` manages the quotas of one entity.
+```
+
+```release-note:new-data-source
+`kafka_acls` lists the ACL entries that match the filters.
+```
+
+```release-note:feature
+provider: Support for a new SASL mechanism.
+```
+
+```release-note:enhancement
+provider: New environment variable `KAFKA_TLS_ENABLED`.
+```
+
+```release-note:bug
+resource/`kafka_topic`: Delete succeeds if the topic is already gone.
+```
+
+```release-note:note
+provider: The build now uses a newer Go version.
+```
+````
+
+One file can have more than one block. If one entry belongs to more than one pull request, put the numbers in the file name: `.changelog/154, #158.txt`. The build then prints `(#154, #158)`. Use quotes around this name in a shell.
+
+To check the format of all files, run `make changelog-check`. To see the entries that are not in a release yet, commit them and run `make changelog-preview`.
+
+### Release steps
+
+1. Make sure that `main` has all the entries for the release and that `make changelog-check` passes.
+2. Run `make changelog-release VERSION=x.y.z`. This writes the section `## x.y.z (date)` at the top of `CHANGELOG.md`. The build uses the entries that are new since the last release tag.
+3. Read the new section. If an entry is wrong, run `git checkout CHANGELOG.md`, correct the entry file, commit it, and do step 2 again.
+4. Commit `CHANGELOG.md`, merge the change, and create the tag `vx.y.z` on the merge commit.
+
+Do not delete entry files after a release. The next build finds the new entries by comparing the files at the last release tag with the files at `HEAD`. The tag must be on a commit that has `.changelog/`. If the last tag was made before `.changelog/` existed, the build uses all entries.
+
 ## FAQ
 
 > **Why not use [Mongey/terraform-provider-kafka](https://github.com/Mongey/terraform-provider-kafka)?**

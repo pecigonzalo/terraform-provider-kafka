@@ -209,7 +209,7 @@ func TestTopicUpdaterReplicationFactor(t *testing.T) {
 		err := testUpdater(f).replicationFactor(t.Context(), "t", 2)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, kafkaclient.ErrInvalidReplicaAssignment)
+		require.ErrorIs(t, err, kafkaclient.ErrInvalidReplicaAssignment)
 		assert.Contains(t, err.Error(), "errors changing replication factor")
 		assert.Zero(t, f.listCalls, "no waiting after a rejected reassignment")
 	})

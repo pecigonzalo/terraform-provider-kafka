@@ -229,7 +229,7 @@ func TestObserveQuota(t *testing.T) {
 		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil, stale, stale, fresh}}
 		entry, err := observeQuota(t.Context(), api, entity, want, time.Millisecond, 5*time.Second)
 		require.NoError(t, err)
-		assert.Equal(t, 20.0, entry.Values["producer_byte_rate"])
+		assert.InDelta(t, 20.0, entry.Values["producer_byte_rate"], 0)
 		assert.Equal(t, 4, api.calls)
 	})
 
@@ -254,7 +254,7 @@ func TestObserveQuota(t *testing.T) {
 		entry, err := observeQuota(t.Context(), api, entity, want, time.Millisecond, 30*time.Millisecond)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		require.NotNil(t, entry)
-		assert.Equal(t, 10.0, entry.Values["producer_byte_rate"])
+		assert.InDelta(t, 10.0, entry.Values["producer_byte_rate"], 0)
 	})
 
 	t.Run("honours_a_cancelled_context", func(t *testing.T) {
@@ -297,7 +297,7 @@ func TestQuotaResourceSettleAndObserve(t *testing.T) {
 		entry, err := r.observe(t.Context(), entity, want, 20*time.Millisecond)
 		require.NoError(t, err)
 		require.NotNil(t, entry)
-		assert.Equal(t, 10.0, entry.Values["producer_byte_rate"])
+		assert.InDelta(t, 10.0, entry.Values["producer_byte_rate"], 0)
 	})
 
 	t.Run("observe_propagates_real_errors", func(t *testing.T) {

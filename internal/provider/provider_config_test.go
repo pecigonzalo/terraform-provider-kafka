@@ -21,7 +21,7 @@ func TestGenerateSASLConfig(t *testing.T) {
 
 	t.Run("defaults to aws-msk-iam", func(t *testing.T) {
 		cfg, err := p.generateSASLConfig(null)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		require.NotNil(t, cfg)
 		assert.Equal(t, string(kafkaclient.SASLMechanismAWSMSKIAM), cfg.Mechanism)
 	})
@@ -39,7 +39,7 @@ func TestGenerateSASLConfig(t *testing.T) {
 			m.Username = types.StringValue("user")
 			m.Password = types.StringValue("pass")
 			cfg, err := p.generateSASLConfig(m)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, string(want), cfg.Mechanism)
 			assert.Equal(t, "user", cfg.Username)
 			assert.Equal(t, "pass", cfg.Password)
@@ -79,7 +79,7 @@ func TestGenerateSASLConfig(t *testing.T) {
 		t.Setenv("KAFKA_SASL_USERNAME", "envuser")
 		t.Setenv("KAFKA_SASL_PASSWORD", "envpass")
 		cfg, err := p.generateSASLConfig(null)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, string(kafkaclient.SASLMechanismPlain), cfg.Mechanism)
 		assert.Equal(t, "envuser", cfg.Username)
 		assert.Equal(t, "envpass", cfg.Password)
@@ -91,7 +91,7 @@ func TestGenerateSASLConfig(t *testing.T) {
 		m := null
 		m.Mechanism = types.StringValue("scram-sha512")
 		cfg, err := p.generateSASLConfig(m)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "envuser", cfg.Username)
 		assert.Equal(t, "envpass", cfg.Password)
 	})
@@ -102,7 +102,7 @@ func TestGenerateSASLConfig(t *testing.T) {
 		m := null
 		m.Username = types.StringValue("cfguser")
 		cfg, err := p.generateSASLConfig(m)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "cfguser", cfg.Username)
 	})
 }
@@ -113,13 +113,13 @@ func TestBootstrapServer(t *testing.T) {
 	t.Run("config_first_entry_wins", func(t *testing.T) {
 		t.Setenv("KAFKA_BOOTSTRAP_SERVERS", "env:9092")
 		got, err := p.bootstrapServer([]types.String{types.StringValue("a:9092"), types.StringValue("b:9092")})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "a:9092", got)
 	})
 	t.Run("falls_back_to_env", func(t *testing.T) {
 		t.Setenv("KAFKA_BOOTSTRAP_SERVERS", " env1:9092 , env2:9092")
 		got, err := p.bootstrapServer(nil)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, "env1:9092", got)
 	})
 	t.Run("errors_when_unset", func(t *testing.T) {

@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -163,7 +164,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 
 	if config.SASL.Username.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
-			path.Root("sasl.username"),
+			path.Root("sasl").AtName("username"),
 			"Unknown Kafka SASL username",
 			"The provider cannot create the Kafka client as there is an unknown configuration value for the SASL username. "+
 				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_SASL_USERNAME environment variable.", envVarPrefix),
@@ -171,28 +172,32 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	}
 	if config.SASL.Password.IsUnknown() {
 		resp.Diagnostics.AddAttributeError(
-			path.Root("sasl.password"),
+			path.Root("sasl").AtName("password"),
 			"Unknown Kafka SASL password",
 			"The provider cannot create the Kafka client as there is an unknown configuration value for the SASL password. "+
 				fmt.Sprintf("Either target apply the source of the value first, set the value statically in the configuration, or use the %s_SASL_PASSWORD environment variable.", envVarPrefix),
 		)
 	}
 
+	// A value that the chosen setup does not use may stay unknown.
+	saslOff := !config.SASL.Enabled.IsUnknown() && !config.SASL.Enabled.IsNull() && !config.SASL.Enabled.ValueBool()
+	tlsOff := !config.TLS.Enabled.IsUnknown() && !config.TLS.Enabled.IsNull() && !config.TLS.Enabled.ValueBool()
 	for _, setting := range []struct {
-		attribute string
-		unknown   bool
+		path    path.Path
+		name    string
+		unknown bool
 	}{
-		{"tls.enabled", config.TLS.Enabled.IsUnknown()},
-		{"tls.skip_verify", config.TLS.SkipVerify.IsUnknown()},
-		{"sasl.enabled", config.SASL.Enabled.IsUnknown()},
-		{"sasl.mechanism", config.SASL.Mechanism.IsUnknown()},
-		{"timeout", config.Timeout.IsUnknown()},
+		{path.Root("tls").AtName("enabled"), "tls.enabled", config.TLS.Enabled.IsUnknown()},
+		{path.Root("tls").AtName("skip_verify"), "tls.skip_verify", !tlsOff && config.TLS.SkipVerify.IsUnknown()},
+		{path.Root("sasl").AtName("enabled"), "sasl.enabled", config.SASL.Enabled.IsUnknown()},
+		{path.Root("sasl").AtName("mechanism"), "sasl.mechanism", !saslOff && config.SASL.Mechanism.IsUnknown()},
+		{path.Root("timeout"), "timeout", config.Timeout.IsUnknown()},
 	} {
 		if setting.unknown {
 			resp.Diagnostics.AddAttributeError(
-				path.Root(strings.SplitN(setting.attribute, ".", 2)[0]),
+				setting.path,
 				"Unknown Kafka provider setting",
-				fmt.Sprintf("The provider cannot create the Kafka client because the value of %s is unknown. ", setting.attribute)+
+				fmt.Sprintf("The provider cannot create the Kafka client because the value of %s is unknown. ", setting.name)+
 					"Either target apply the source of the value first, or set the value statically in the configuration.",
 			)
 		}
@@ -246,6 +251,9 @@ func (p *kafkaProvider) bootstrapServer(configured []types.String) (string, erro
 	}
 	return "", fmt.Errorf("set bootstrap_servers or the %s_BOOTSTRAP_SERVERS environment variable", strings.ToUpper(p.typeName))
 }
+
+// maxTimeoutSeconds is the largest timeout that fits in a time.Duration.
+const maxTimeoutSeconds = int64(math.MaxInt64 / int64(time.Second))
 
 // buildClientConfig resolves the client settings from the configuration and
 // the environment. A value in the configuration takes precedence over the
@@ -313,6 +321,11 @@ func (p *kafkaProvider) buildClientConfig(config kafkaProviderModel, diags *diag
 	if !config.Timeout.IsNull() {
 		timeout = config.Timeout.ValueInt64()
 	}
+	if timeout > maxTimeoutSeconds {
+		diags.AddError("Invalid Kafka provider timeout",
+			fmt.Sprintf("The timeout is too large. Use %d seconds or less.", maxTimeoutSeconds))
+		return clientConfig
+	}
 	clientConfig.Timeout = time.Second * time.Duration(timeout)
 	clientConfig.DialTimeout = kafkaclient.DialTimeoutFor(clientConfig.Timeout)
 
@@ -367,10 +380,10 @@ func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (*kafkaclient.S
 
 	if parsed == kafkaclient.SASLMechanismAWSMSKIAM {
 		var unused []string
-		if username != "" {
+		if strings.TrimSpace(username) != "" {
 			unused = append(unused, "a SASL user name (sasl.username or "+p.envVarName("SASL_USERNAME")+")")
 		}
-		if password != "" {
+		if strings.TrimSpace(password) != "" {
 			unused = append(unused, "a SASL password (sasl.password or "+p.envVarName("SASL_PASSWORD")+")")
 		}
 		if len(unused) > 0 {
@@ -382,10 +395,10 @@ func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (*kafkaclient.S
 	}
 
 	var missing []string
-	if username == "" {
+	if strings.TrimSpace(username) == "" {
 		missing = append(missing, "user name (sasl.username or "+p.envVarName("SASL_USERNAME")+")")
 	}
-	if password == "" {
+	if strings.TrimSpace(password) == "" {
 		missing = append(missing, "password (sasl.password or "+p.envVarName("SASL_PASSWORD")+")")
 	}
 	if len(missing) > 0 {

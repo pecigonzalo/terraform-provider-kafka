@@ -2,6 +2,7 @@ package provider
 
 import (
 	"maps"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -228,6 +229,9 @@ func TestGenerateSASLConfig_Credentials(t *testing.T) {
 		{name: "plain_empty_user_in_config", mechanism: "plain", username: types.StringValue(""), password: types.StringValue("p"), envUser: "u", wantErr: []string{"user name"}},
 		{name: "scram256_no_credentials", mechanism: "scram-sha256", wantErr: []string{"user name", "password"}},
 		{name: "scram512_no_password", mechanism: "scram-sha512", username: types.StringValue("u"), wantErr: []string{"password"}},
+		{name: "plain_whitespace_user", mechanism: "plain", username: types.StringValue("  "), password: types.StringValue("p"), wantErr: []string{"user name"}},
+		{name: "plain_whitespace_password", mechanism: "plain", username: types.StringValue("u"), password: types.StringValue(" \t"), wantErr: []string{"password"}},
+		{name: "aws_with_whitespace_values", mechanism: "aws-msk-iam", username: types.StringValue(" "), password: types.StringValue(" ")},
 		{name: "aws_without_credentials", mechanism: "aws-msk-iam"},
 		{name: "aws_with_empty_config_values", mechanism: "aws-msk-iam", username: types.StringValue(""), password: types.StringValue("")},
 		{name: "aws_with_user_in_config", mechanism: "aws-msk-iam", username: types.StringValue("secret-user"), wantErr: []string{"does not use", "user name"}},
@@ -414,6 +418,8 @@ func TestBuildClientConfig_Timeout(t *testing.T) {
 		{name: "long_config_limits_the_dial_timeout", config: types.Int64Value(900), wantTimeout: 900 * time.Second, wantDial: kafkaclient.MaxDialTimeout},
 		{name: "env_is_used", env: "10", config: types.Int64Null(), wantTimeout: 10 * time.Second, wantDial: 10 * time.Second},
 		{name: "config_wins_over_env", env: "10", config: types.Int64Value(60), wantTimeout: 60 * time.Second, wantDial: kafkaclient.MaxDialTimeout},
+		{name: "config_too_large_is_an_error", config: types.Int64Value(math.MaxInt64), wantErr: "too large"},
+		{name: "env_too_large_is_an_error", env: "9223372036854775807", config: types.Int64Null(), wantErr: "too large"},
 		{name: "env_zero_is_an_error", env: "0", config: types.Int64Null(), wantErr: "KAFKA_TIMEOUT must be 1 or more"},
 		{name: "env_negative_is_an_error", env: "-5", config: types.Int64Null(), wantErr: "KAFKA_TIMEOUT must be 1 or more"},
 		{name: "env_not_a_number_is_an_error", env: "soon", config: types.Int64Null(), wantErr: "KAFKA_TIMEOUT must be an integer"},
@@ -588,6 +594,40 @@ func TestConfigure(t *testing.T) {
 			nullTimeout)
 		require.True(t, resp.Diagnostics.HasError())
 		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "tls.enabled")
+	})
+
+	t.Run("unknown_mechanism_is_fine_if_sasl_is_off", func(t *testing.T) {
+		clearProviderEnv(t)
+		resp := configureWith(t, nil,
+			map[string]tftypes.Value{
+				"enabled":   boolean(false),
+				"mechanism": tftypes.NewValue(tftypes.String, tftypes.UnknownValue),
+			},
+			nullTimeout)
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+	})
+
+	t.Run("unknown_skip_verify_is_fine_if_tls_is_off", func(t *testing.T) {
+		clearProviderEnv(t)
+		resp := configureWith(t,
+			map[string]tftypes.Value{
+				"enabled":     boolean(false),
+				"skip_verify": tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue),
+			},
+			map[string]tftypes.Value{"enabled": boolean(false)},
+			nullTimeout)
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+	})
+
+	t.Run("unknown_setting_error_points_at_the_attribute", func(t *testing.T) {
+		clearProviderEnv(t)
+		resp := configureWith(t, nil,
+			map[string]tftypes.Value{"mechanism": tftypes.NewValue(tftypes.String, tftypes.UnknownValue)},
+			nullTimeout)
+		require.True(t, resp.Diagnostics.HasError())
+		withPath, ok := resp.Diagnostics.Errors()[0].(diag.DiagnosticWithPath)
+		require.True(t, ok)
+		assert.Equal(t, "sasl.mechanism", withPath.Path().String())
 	})
 
 	t.Run("unknown_mechanism_is_an_error_that_names_the_setting", func(t *testing.T) {

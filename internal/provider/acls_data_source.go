@@ -38,15 +38,43 @@ type aclsDataSource struct {
 
 // aclsDataSourceModel describes the kafka_acls data source data model.
 type aclsDataSourceModel struct {
-	ID                  types.String       `tfsdk:"id"`
-	ResourceType        types.String       `tfsdk:"resource_type"`
-	ResourceName        types.String       `tfsdk:"resource_name"`
-	ResourcePatternType types.String       `tfsdk:"resource_pattern_type"`
-	Principal           types.String       `tfsdk:"principal"`
-	Host                types.String       `tfsdk:"host"`
-	Operation           types.String       `tfsdk:"operation"`
-	PermissionType      types.String       `tfsdk:"permission_type"`
-	ACLs                []ACLResourceModel `tfsdk:"acls"`
+	ID                  types.String    `tfsdk:"id"`
+	ResourceType        types.String    `tfsdk:"resource_type"`
+	ResourceName        types.String    `tfsdk:"resource_name"`
+	ResourcePatternType types.String    `tfsdk:"resource_pattern_type"`
+	Principal           types.String    `tfsdk:"principal"`
+	Host                types.String    `tfsdk:"host"`
+	Operation           types.String    `tfsdk:"operation"`
+	PermissionType      types.String    `tfsdk:"permission_type"`
+	ACLs                []aclEntryModel `tfsdk:"acls"`
+}
+
+// aclEntryModel describes one ACL in the acls attribute of the data source. It
+// is separate from the model of the kafka_acl resource, so a change to the
+// schema of one does not change the schema of the other.
+type aclEntryModel struct {
+	ID                  types.String `tfsdk:"id"`
+	ResourceType        types.String `tfsdk:"resource_type"`
+	ResourceName        types.String `tfsdk:"resource_name"`
+	ResourcePatternType types.String `tfsdk:"resource_pattern_type"`
+	Principal           types.String `tfsdk:"principal"`
+	Host                types.String `tfsdk:"host"`
+	Operation           types.String `tfsdk:"operation"`
+	PermissionType      types.String `tfsdk:"permission_type"`
+}
+
+// newACLEntryModel converts an ACL to an entry of the acls attribute.
+func newACLEntryModel(acl kafkaclient.ACL) aclEntryModel {
+	return aclEntryModel{
+		ID:                  types.StringValue(encodeACLID(acl)),
+		ResourceType:        types.StringValue(string(acl.ResourceType)),
+		ResourceName:        types.StringValue(acl.ResourceName),
+		ResourcePatternType: types.StringValue(string(acl.PatternType)),
+		Principal:           types.StringValue(acl.Principal),
+		Host:                types.StringValue(acl.Host),
+		Operation:           types.StringValue(string(acl.Operation)),
+		PermissionType:      types.StringValue(string(acl.PermissionType)),
+	}
 }
 
 func (d *aclsDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -249,12 +277,12 @@ func (m aclsDataSourceModel) filter() kafkaclient.ACLFilter {
 // aclModels converts ACLs to their model, sorted by id so the result is the
 // same however the broker orders its answer. It never returns nil, so an
 // empty result is an empty list rather than null.
-func aclModels(acls []kafkaclient.ACL) []ACLResourceModel {
-	models := make([]ACLResourceModel, 0, len(acls))
+func aclModels(acls []kafkaclient.ACL) []aclEntryModel {
+	models := make([]aclEntryModel, 0, len(acls))
 	for _, acl := range acls {
-		models = append(models, aclToModel(acl))
+		models = append(models, newACLEntryModel(acl))
 	}
-	slices.SortFunc(models, func(a, b ACLResourceModel) int {
+	slices.SortFunc(models, func(a, b aclEntryModel) int {
 		return strings.Compare(a.ID.ValueString(), b.ID.ValueString())
 	})
 	return models

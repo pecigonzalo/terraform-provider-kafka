@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	fwdatasourceschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
@@ -19,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -351,7 +353,7 @@ func TestACLModelsOrder(t *testing.T) {
 			"topic|a|literal|User:alice|*|read|allow",
 			"topic|b|literal|User:alice|*|read|allow",
 		}},
-		{"deny_sorts_before_allow_for_same_acl_otherwise", []kafkaclient.ACL{
+		{"allow_sorts_before_deny_for_same_acl_otherwise", []kafkaclient.ACL{
 			aclWith(func(a *kafkaclient.ACL) { a.PermissionType = kafkaclient.ACLPermissionTypeDeny }),
 			aclWith(func(a *kafkaclient.ACL) {}),
 		}, []string{
@@ -465,6 +467,41 @@ func testAccACLsCheckIDs(name string, contains bool, wantIDs ...string) resource
 	}
 }
 
+// waitForTopicACLs fails the test unless every broker reports exactly want
+// ACLs for the topic.
+//
+// A data source has no expected state to wait for. The provider client reaches
+// one broker at a time and can switch to another, and a broker that has not
+// learned an ACL yet does not report it. Tests call this from PreConfig,
+// before a step that reads the ACLs with a data source.
+func waitForTopicACLs(t *testing.T, topic string, want int) {
+	t.Helper()
+
+	addresses, err := testAccBrokerAddresses(t.Context())
+	require.NoError(t, err)
+	for _, address := range addresses {
+		client := &kafka.Client{Addr: kafka.TCP(address), Transport: pinnedTransport(address), Timeout: 10 * time.Second}
+		require.Eventually(t, func() bool {
+			resp, err := client.DescribeACLs(t.Context(), &kafka.DescribeACLsRequest{Filter: kafka.ACLFilter{
+				ResourceTypeFilter:        kafka.ResourceTypeTopic,
+				ResourceNameFilter:        topic,
+				ResourcePatternTypeFilter: kafka.PatternTypeLiteral,
+				Operation:                 kafka.ACLOperationTypeAny,
+				PermissionType:            kafka.ACLPermissionTypeAny,
+			}})
+			if err != nil || resp.Error != nil {
+				return false
+			}
+			got := 0
+			for _, resource := range resp.Resources {
+				got += len(resource.ACLs)
+			}
+			return got == want
+		}, 30*time.Second, 100*time.Millisecond,
+			"broker %s does not report %d ACLs for topic %q", address, want, topic)
+	}
+}
+
 func TestAccACLsDataSource(t *testing.T) {
 	suffix := testAccACLSuffix(t)
 	topic := "acls-ds-" + suffix
@@ -502,8 +539,12 @@ data "kafka_acls" "nothing" {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		CheckDestroy:             testAccACLCheckGone(t, topic),
 		Steps: []resource.TestStep{
+			// Create the ACLs first, so that the test can wait until every
+			// broker reports them before the data sources read them.
+			{Config: testAccACLsConfig(topic, principal, "")},
 			{
-				Config: testAccACLsConfig(topic, principal, dataSources),
+				PreConfig: func() { waitForTopicACLs(t, topic, 2) },
+				Config:    testAccACLsConfig(topic, principal, dataSources),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					// By resource type and name: both ACLs, sorted by id.
 					resource.TestCheckResourceAttr("data.kafka_acls.by_resource", "acls.#", "2"),

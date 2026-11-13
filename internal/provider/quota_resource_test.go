@@ -95,6 +95,17 @@ func TestAccQuotaResource(t *testing.T) {
 	})
 }
 
+// pinnedTransport returns a transport that dials address for every
+// connection, whatever broker the cluster metadata names. A request through it
+// reaches that broker only.
+func pinnedTransport(address string) *kafka.Transport {
+	return &kafka.Transport{
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		},
+	}
+}
+
 // describeQuotaOnBroker asks one named broker for the quota on exactly entity.
 // It returns nil if that broker reports no quota.
 //
@@ -105,11 +116,7 @@ func TestAccQuotaResource(t *testing.T) {
 // bootstrap address does not ask that broker. This function dials the wanted
 // broker for every connection, so the answer comes from that broker only.
 func describeQuotaOnBroker(ctx context.Context, address string, entity kafkaclient.QuotaEntity) (*kafkaclient.QuotaEntry, error) {
-	transport := &kafka.Transport{
-		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, network, address)
-		},
-	}
+	transport := pinnedTransport(address)
 	defer transport.CloseIdleConnections()
 
 	req := &describeclientquotas.Request{Strict: true}

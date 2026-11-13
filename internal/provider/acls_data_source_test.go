@@ -68,7 +68,8 @@ func aclsConfigValue(t *testing.T, set map[string]*string) tftypes.Value {
 	return tftypes.NewValue(typ, vals)
 }
 
-func strPtr(s string) *string { return &s }
+//go:fix inline
+func strPtr(s string) *string { return new(s) }
 
 func TestACLsDataSourceValidateConfig(t *testing.T) {
 	tests := []struct {
@@ -78,26 +79,26 @@ func TestACLsDataSourceValidateConfig(t *testing.T) {
 	}{
 		{"no_filters", nil, ""},
 		{"all_filters", map[string]*string{
-			"resource_type": strPtr("topic"), "resource_name": strPtr("orders"), "resource_pattern_type": strPtr("literal"),
-			"principal": strPtr("User:alice"), "host": strPtr("*"), "operation": strPtr("read"), "permission_type": strPtr("allow"),
+			"resource_type": new("topic"), "resource_name": new("orders"), "resource_pattern_type": new("literal"),
+			"principal": new("User:alice"), "host": new("*"), "operation": new("read"), "permission_type": new("allow"),
 		}, ""},
-		{"filter_only_pattern_match", map[string]*string{"resource_pattern_type": strPtr("match"), "resource_name": strPtr("orders")}, ""},
+		{"filter_only_pattern_match", map[string]*string{"resource_pattern_type": new("match"), "resource_name": new("orders")}, ""},
 		{"filter_only_any_values", map[string]*string{
-			"resource_type": strPtr("any"), "resource_pattern_type": strPtr("any"), "operation": strPtr("any"), "permission_type": strPtr("any"),
+			"resource_type": new("any"), "resource_pattern_type": new("any"), "operation": new("any"), "permission_type": new("any"),
 		}, ""},
-		{"unknown_values_are_not_checked", map[string]*string{"resource_type": strPtr("group"), "operation": nil}, ""},
+		{"unknown_values_are_not_checked", map[string]*string{"resource_type": new("group"), "operation": nil}, ""},
 		{"known_fields_are_checked_when_another_is_unknown", map[string]*string{
-			"resource_type": strPtr("group"), "operation": strPtr("write"), "resource_name": nil,
+			"resource_type": new("group"), "operation": new("write"), "resource_name": nil,
 		}, "not valid for resource type"},
-		{"unknown_enum_value", map[string]*string{"operation": strPtr("poke")}, "unknown operation"},
-		{"operation_not_valid_for_type", map[string]*string{"resource_type": strPtr("group"), "operation": strPtr("write")}, "not valid for resource type"},
-		{"cluster_with_other_name", map[string]*string{"resource_type": strPtr("cluster"), "resource_name": strPtr("x")}, "must be"},
-		{"prefixed_wildcard", map[string]*string{"resource_pattern_type": strPtr("prefixed"), "resource_name": strPtr("*")}, "wildcard"},
-		{"malformed_principal", map[string]*string{"principal": strPtr("alice")}, "Type:name"},
-		{"wildcard_inside_host", map[string]*string{"host": strPtr("10.*")}, "does not support network ranges"},
-		{"network_range_host", map[string]*string{"host": strPtr("10.0.0.0/8")}, "does not support network ranges"},
-		{"ip_host", map[string]*string{"host": strPtr("2001:db8::1")}, ""},
-		{"wrong_case_principal_type", map[string]*string{"principal": strPtr("user:alice")}, `write "User:alice"`},
+		{"unknown_enum_value", map[string]*string{"operation": new("poke")}, "unknown operation"},
+		{"operation_not_valid_for_type", map[string]*string{"resource_type": new("group"), "operation": new("write")}, "not valid for resource type"},
+		{"cluster_with_other_name", map[string]*string{"resource_type": new("cluster"), "resource_name": new("x")}, "must be"},
+		{"prefixed_wildcard", map[string]*string{"resource_pattern_type": new("prefixed"), "resource_name": new("*")}, "wildcard"},
+		{"malformed_principal", map[string]*string{"principal": new("alice")}, "Type:name"},
+		{"wildcard_inside_host", map[string]*string{"host": new("10.*")}, "does not support network ranges"},
+		{"network_range_host", map[string]*string{"host": new("10.0.0.0/8")}, "does not support network ranges"},
+		{"ip_host", map[string]*string{"host": new("2001:db8::1")}, ""},
+		{"wrong_case_principal_type", map[string]*string{"principal": new("user:alice")}, `write "User:alice"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -233,8 +234,8 @@ func TestACLsDataSourceRead(t *testing.T) {
 	t.Run("passes_filters_through_and_unset_means_any", func(t *testing.T) {
 		fake := &fakeACLDescriber{}
 		run(t, fake, map[string]*string{
-			"resource_type": strPtr("topic"), "resource_name": strPtr("orders"), "resource_pattern_type": strPtr("match"),
-			"principal": strPtr("User:alice"),
+			"resource_type": new("topic"), "resource_name": new("orders"), "resource_pattern_type": new("match"),
+			"principal": new("User:alice"),
 		})
 		assert.Equal(t, kafkaclient.ACLFilter{
 			ResourceType: kafkaclient.ACLResourceTypeTopic, ResourceName: "orders",
@@ -243,13 +244,13 @@ func TestACLsDataSourceRead(t *testing.T) {
 	})
 
 	t.Run("id_is_derived_from_the_filter", func(t *testing.T) {
-		_, got := run(t, &fakeACLDescriber{}, map[string]*string{"resource_name": strPtr("orders"), "operation": strPtr("read")})
+		_, got := run(t, &fakeACLDescriber{}, map[string]*string{"resource_name": new("orders"), "operation": new("read")})
 		assert.Equal(t, "acls||orders||||read|", got.ID.ValueString())
 	})
 
 	t.Run("inconsistent_filter_is_rejected_without_calling_the_broker", func(t *testing.T) {
 		fake := &fakeACLDescriber{}
-		resp, _ := run(t, fake, map[string]*string{"resource_type": strPtr("group"), "operation": strPtr("write")})
+		resp, _ := run(t, fake, map[string]*string{"resource_type": new("group"), "operation": new("write")})
 		require.True(t, resp.Diagnostics.HasError())
 		assert.Zero(t, fake.calls)
 	})

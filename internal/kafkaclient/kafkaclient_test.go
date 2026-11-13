@@ -248,8 +248,8 @@ func TestReadOnlyClientHasNoMutatingMethods(t *testing.T) {
 
 func methodNames(t reflect.Type) []string {
 	names := make([]string, 0, t.NumMethod())
-	for i := range t.NumMethod() {
-		names = append(names, t.Method(i).Name)
+	for method := range t.Methods() {
+		names = append(names, method.Name)
 	}
 	return names
 }

@@ -21,7 +21,7 @@ A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmenti
 ## Requirements
 
 - [Terraform](https://www.terraform.io/downloads.html) >= 1.0
-- [Go](https://golang.org/doc/install) >= 1.26
+- [Go](https://golang.org/doc/install) >= 1.27
 
 ### Optional
 

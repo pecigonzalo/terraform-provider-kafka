@@ -18,7 +18,7 @@
       {
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            tools.go_1_26
+            tools.go_1_27
             tools.golangci-lint
             tools.govulncheck
           ] ++ (with pkgs; [

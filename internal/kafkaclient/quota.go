@@ -187,30 +187,33 @@ func (f QuotaFilter) validate() error {
 	return nil
 }
 
-func (f QuotaFilter) components() []kafka.DescribeClientQuotasRequestComponent {
-	comps := make([]kafka.DescribeClientQuotasRequestComponent, 0, len(f.Entity)+len(f.AnyOf))
+func (f QuotaFilter) components() []describeclientquotas.Component {
+	comps := make([]describeclientquotas.Component, 0, len(f.Entity)+len(f.AnyOf))
 	for _, t := range f.Entity.sortedTypes() {
 		n := f.Entity[t]
-		c := kafka.DescribeClientQuotasRequestComponent{EntityType: string(t), MatchType: matchExact, Match: n.Name}
+		c := describeclientquotas.Component{EntityType: string(t), MatchType: matchExact, Match: n.Name}
 		if n.Default {
 			c.MatchType, c.Match = matchDefault, ""
 		}
 		comps = append(comps, c)
 	}
 	for _, t := range f.AnyOf {
-		comps = append(comps, kafka.DescribeClientQuotasRequestComponent{EntityType: string(t), MatchType: matchAny})
+		comps = append(comps, describeclientquotas.Component{EntityType: string(t), MatchType: matchAny})
 	}
 	return comps
 }
 
-// CheckQuotaSupport reports whether the broker offers the client quota APIs.
-// It returns an error wrapping [ErrQuotasUnsupported] when it does not. The
-// result is not cached.
-func (r *Reader) CheckQuotaSupport(ctx context.Context) error {
-	return r.requireAPIs(ctx, apiKeyDescribeClientQuotas, apiKeyAlterClientQuotas)
-}
-
+// requireAPIs checks that the broker offers all of keys. A positive result
+// stays for the life of the client, so the check sends one request in total.
+// A negative result is not kept: the next call asks the broker again.
+//
+// Each request can reach a different broker. If the check is skipped and a
+// broker lacks the API, its UnsupportedVersion error becomes
+// [ErrQuotasUnsupported] in [classifyQuotaError].
 func (r *Reader) requireAPIs(ctx context.Context, keys ...int) error {
+	if r.hasAPIs(keys) {
+		return nil
+	}
 	resp, err := r.kc.ApiVersions(ctx, &kafka.ApiVersionsRequest{})
 	if err != nil {
 		return fmt.Errorf("check client quota support: %w", err)
@@ -223,7 +226,30 @@ func (r *Reader) requireAPIs(ctx context.Context, keys ...int) error {
 			return fmt.Errorf("broker does not offer API key %d: %w", key, ErrQuotasUnsupported)
 		}
 	}
+	r.rememberAPIs(resp.ApiKeys)
 	return nil
+}
+
+func (r *Reader) hasAPIs(keys []int) bool {
+	r.apiMu.Lock()
+	defer r.apiMu.Unlock()
+	for _, key := range keys {
+		if _, ok := r.knownAPIs[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Reader) rememberAPIs(offered []kafka.ApiVersionsResponseApiKey) {
+	r.apiMu.Lock()
+	defer r.apiMu.Unlock()
+	if r.knownAPIs == nil {
+		r.knownAPIs = make(map[int]struct{}, len(offered))
+	}
+	for _, a := range offered {
+		r.knownAPIs[a.ApiKey] = struct{}{}
+	}
 }
 
 // DescribeQuotas returns the quota entries matching filter. It returns an
@@ -239,15 +265,10 @@ func (r *Reader) DescribeQuotas(ctx context.Context, filter QuotaFilter) ([]Quot
 
 	// kafka-go's Client.DescribeClientQuotas drops the response's top-level
 	// error code, so send the request through the transport and check it here.
-	req := &describeclientquotas.Request{Strict: filter.Strict}
-	for _, c := range filter.components() {
-		req.Components = append(req.Components, describeclientquotas.Component{
-			EntityType: c.EntityType, MatchType: c.MatchType, Match: c.Match,
-		})
-	}
+	req := &describeclientquotas.Request{Strict: filter.Strict, Components: filter.components()}
 	resp, err := r.roundTripDescribe(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("describe quotas: %w", err)
+		return nil, fmt.Errorf("describe quotas: %w", classifyQuotaError(err))
 	}
 	if resp.ErrorCode != 0 {
 		return nil, fmt.Errorf("describe quotas: %w", quotaCodeError(resp.ErrorCode, resp.ErrorMessage))
@@ -373,8 +394,12 @@ func quotaCodeError(code int16, msg string) error {
 }
 
 // classifyQuotaError adds [ErrQuotaAuthorizationFailed] to authorization
-// failures while keeping the original error in the chain.
+// failures and [ErrQuotasUnsupported] to unsupported-version failures, while
+// keeping the original error in the chain.
 func classifyQuotaError(err error) error {
+	if errors.Is(err, kafka.UnsupportedVersion) {
+		return fmt.Errorf("%w: %w", ErrQuotasUnsupported, err)
+	}
 	if errors.Is(err, kafka.ClusterAuthorizationFailed) {
 		return fmt.Errorf("%w: %w", ErrQuotaAuthorizationFailed, err)
 	}

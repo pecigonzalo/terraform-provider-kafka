@@ -4,22 +4,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 )
 
 // Reader exposes the read-only operations of a Kafka cluster. It has no
 // mutating methods, which is what makes [ReadOnlyClient] safe to hand to
-// data sources.
-//
-// Read operations added by later tasks belong on Reader.
+// data sources. Add an operation to Reader only if it never changes the
+// cluster. This includes topic, broker, ACL and quota reads.
 type Reader struct {
 	kc *kafka.Client
+
+	// apiMu guards knownAPIs.
+	apiMu sync.Mutex
+	// knownAPIs holds the Kafka API keys that a broker has reported. A broker
+	// does not lose an API, so the client keeps these for its whole life.
+	knownAPIs map[int]struct{}
 }
 
-// Metadata returns cluster metadata for the given topics, or for all topics
+// Timeout returns the request timeout the client was configured with. Callers
+// that wait for the cluster to converge use it to bound how long they wait.
+func (r *Reader) Timeout() time.Duration {
+	return r.kc.Timeout
+}
+
+// metadata returns cluster metadata for the given topics, or for all topics
 // when none are given.
-func (r *Reader) Metadata(ctx context.Context, topics ...string) (*kafka.MetadataResponse, error) {
+func (r *Reader) metadata(ctx context.Context, topics ...string) (*kafka.MetadataResponse, error) {
 	resp, err := r.kc.Metadata(ctx, &kafka.MetadataRequest{Topics: topics})
 	if err != nil {
 		return nil, fmt.Errorf("fetch cluster metadata: %w", err)
@@ -66,7 +79,9 @@ func (c *Client) ReadOnly() *ReadOnlyClient {
 
 var errNilClient = errors.New("kafkaclient: nil client")
 
-// Close releases idle connections held by the client's transport.
+// Close releases idle connections held by the client's transport. It returns
+// an error for a nil client. A nil client is a programming mistake, and the
+// error makes it visible instead of hiding it.
 func (c *Client) Close() error {
 	if c == nil || c.Reader == nil {
 		return errNilClient

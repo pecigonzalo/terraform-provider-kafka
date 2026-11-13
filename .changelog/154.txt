@@ -1,0 +1,7 @@
+```release-note:breaking-change
+provider: `timeout` must be 1 or more. In v0.5.3, the provider did not check it. If you set `timeout` to 0, use a larger value.
+```
+
+```release-note:breaking-change
+resource/`kafka_topic`: `configuration` is now optional only. The provider now tracks only the keys that you set. In v0.5.3, `configuration` was also computed, and state held all broker settings. Read the upgrade note below before you apply.
+```

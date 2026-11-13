@@ -1,0 +1,19 @@
+```release-note:breaking-change
+provider: `tls.enabled` is now `true` by default. In v0.5.3, TLS was off if you did not set `tls.enabled`. The documentation said the default was `true`. If your broker does not use TLS, set `tls = { enabled = false }`.
+```
+
+```release-note:breaking-change
+provider: The SASL mechanism `plain` now sends PLAIN. In v0.5.3, it sent SCRAM-SHA-256. If your broker uses SCRAM-SHA-256, set `mechanism = "scram-sha256"`.
+```
+
+```release-note:breaking-change
+provider: The SASL mechanisms `scram-sha256` and `scram-sha512` now work. The names `scram-sha-256` and `scram-sha-512` are also valid. In v0.5.3, these mechanisms gave the error `unable to detect SASL mechanism`.
+```
+
+```release-note:breaking-change
+provider: The SASL user name and password now come from the configuration or from `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD`. This is true for all mechanisms. In v0.5.3, the provider read them from the configuration only if you set `mechanism`. Check that your credentials are correct.
+```
+
+```release-note:breaking-change
+provider: `bootstrap_servers` is now optional. If you do not set it, the provider uses `KAFKA_BOOTSTRAP_SERVERS`. This variable holds a comma-separated list. The default `localhost:9092` is removed. If you set neither, the provider gives an error. Set one of them.
+```

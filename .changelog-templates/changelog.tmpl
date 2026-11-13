@@ -1,0 +1,49 @@
+{{- /* Section order: breaking changes, upgrade notes, features, enhancements, bug fixes, notes. */ -}}
+{{- $breaking := index .NotesByType "breaking-change" -}}
+{{- $upgrade := index .NotesByType "upgrade-note" -}}
+{{- $features := combineTypes (index .NotesByType "new-resource") (index .NotesByType "new-data-source") (index .NotesByType "feature") -}}
+{{- $enhancements := index .NotesByType "enhancement" -}}
+{{- $bugs := index .NotesByType "bug" -}}
+{{- $notes := index .NotesByType "note" -}}
+{{- if $breaking -}}
+BREAKING CHANGES:
+
+{{range $breaking -}}
+* {{template "note" .}}
+{{end}}
+{{end -}}
+{{- if $upgrade -}}
+UPGRADE NOTES:
+
+{{range $upgrade -}}
+* {{template "note" .}}
+{{end}}
+{{end -}}
+{{- if $features -}}
+FEATURES:
+
+{{range $features -}}
+* {{template "note" .}}
+{{end}}
+{{end -}}
+{{- if $enhancements -}}
+ENHANCEMENTS:
+
+{{range $enhancements -}}
+* {{template "note" .}}
+{{end}}
+{{end -}}
+{{- if $bugs -}}
+BUG FIXES:
+
+{{range $bugs -}}
+* {{template "note" .}}
+{{end}}
+{{end -}}
+{{- if $notes -}}
+NOTES:
+
+{{range $notes -}}
+* {{template "note" .}}
+{{end}}
+{{end -}}

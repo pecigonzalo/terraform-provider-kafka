@@ -1,0 +1,3 @@
+```release-note:note
+The project now has a `LICENSE` file with the MIT license. Before this, the repository had no license file.
+```

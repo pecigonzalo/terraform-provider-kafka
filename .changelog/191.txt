@@ -1,0 +1,3 @@
+```release-note:breaking-change
+data source/`kafka_topic`: The attribute `version` is removed. It was always `0`. If your configuration reads `data.kafka_topic.<name>.version`, remove that reference. Plan gives an error if you keep it.
+```

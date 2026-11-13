@@ -155,7 +155,7 @@ func TestReaderTopic_NotFound(t *testing.T) {
 	_, err := r.Topic(t.Context(), "missing")
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrTopicNotFound)
+	require.ErrorIs(t, err, ErrTopicNotFound)
 	assert.Zero(t, rt.configRequests, "no config request for a missing topic")
 }
 
@@ -193,7 +193,7 @@ func TestReaderTopic_MetadataTopicError(t *testing.T) {
 	_, err := r.Topic(t.Context(), "even")
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, kafka.TopicAuthorizationFailed)
+	require.ErrorIs(t, err, kafka.TopicAuthorizationFailed)
 	assert.NotErrorIs(t, err, ErrTopicNotFound)
 }
 
@@ -268,7 +268,7 @@ func TestReader_TransportErrorWrapped(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			err := call()
 			require.Error(t, err)
-			assert.ErrorIs(t, err, sentinel)
+			require.ErrorIs(t, err, sentinel)
 			assert.NotErrorIs(t, err, ErrTopicNotFound)
 		})
 	}
@@ -282,8 +282,8 @@ func TestReader_DescribeConfigsTransportErrorWrapped(t *testing.T) {
 	_, err := r.Topic(t.Context(), "even")
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, sentinel)
-	assert.NotErrorIs(t, err, ErrTopicNotFound)
+	require.ErrorIs(t, err, sentinel)
+	require.NotErrorIs(t, err, ErrTopicNotFound)
 }
 
 type failOnConfigs struct {

@@ -296,10 +296,10 @@ func TestCreateACL(t *testing.T) {
 			err := newACLTestClient(t, tc.rt).CreateACL(t.Context(), validACL())
 			require.Error(t, err)
 			for _, w := range tc.wantIs {
-				assert.ErrorIs(t, err, w)
+				require.ErrorIs(t, err, w)
 			}
 			for _, w := range tc.wantNot {
-				assert.NotErrorIs(t, err, w)
+				require.NotErrorIs(t, err, w)
 			}
 			if tc.wantText != "" {
 				assert.Contains(t, err.Error(), tc.wantText)

@@ -21,7 +21,7 @@ A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmenti
 ## Requirements
 
 - [Terraform](https://www.terraform.io/downloads.html) >= 1.0
-- [Go](https://golang.org/doc/install) >= 1.25
+- [Go](https://golang.org/doc/install) >= 1.27
 
 ### Optional
 
@@ -37,6 +37,18 @@ A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmenti
 ```shell
 go install
 ```
+
+## Running checks
+
+The Nix development shell has the tools that CI uses. Enter it with `nix develop`. Then run these commands:
+
+```shell
+go test -race -count=1 ./...
+golangci-lint run ./...
+govulncheck ./...
+```
+
+`make testacc` runs the acceptance tests. It needs Docker.
 
 ## Adding Dependencies
 

@@ -132,7 +132,7 @@ func TestCanonicalEnumValidator(t *testing.T) {
 func TestACLDocumentedValuesAreValid(t *testing.T) {
 	for _, v := range aclResourceTypes {
 		_, err := kafkaclient.ParseACLResourceType(string(v))
-		assert.NoError(t, err, string(v))
+		require.NoError(t, err, string(v))
 	}
 	for _, v := range aclOperations {
 		_, err := kafkaclient.ParseACLOperation(string(v))
@@ -332,8 +332,8 @@ func TestWaitForACL(t *testing.T) {
 	t.Run("describe_error_is_returned", func(t *testing.T) {
 		api := &fakeACLAPI{describeErr: fmt.Errorf("describe ACLs: %w", kafkaclient.ErrNotAuthorized)}
 		err := newTestACLResource(api).waitForACL(t.Context(), testACL(), true, time.Second)
-		assert.ErrorIs(t, err, kafkaclient.ErrNotAuthorized)
-		assert.NotErrorIs(t, err, errACLNotSettled)
+		require.ErrorIs(t, err, kafkaclient.ErrNotAuthorized)
+		require.NotErrorIs(t, err, errACLNotSettled)
 		assert.Equal(t, 1, api.describes, "a failing describe is not retried")
 	})
 
@@ -341,7 +341,7 @@ func TestWaitForACL(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		err := newTestACLResource(&fakeACLAPI{}).waitForACL(ctx, testACL(), true, time.Second)
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.NotErrorIs(t, err, errACLNotSettled)
 	})
 }

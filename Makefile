@@ -3,11 +3,11 @@ default: testacc
 # Run acceptance tests
 .PHONY: testacc
 testacc:
-	TF_ACC=1 go test ./... -v $(TESTARGS) -timeout 120m
+	TF_ACC=1 go test ./... -count=1 -v $(TESTARGS) -timeout 120m
 
 .PHONY:
 test:
-	go test ./... -v $(TESTARGS) -timeout 120m
+	go test ./... -count=1 -v $(TESTARGS) -timeout 120m
 
 .PHONY: install
 install:

@@ -172,7 +172,7 @@ func TestDescribeQuotas_Errors(t *testing.T) {
 			_, err := newQuotaClient(t, rt).DescribeQuotas(t.Context(), tc.filter)
 			require.Error(t, err)
 			if tc.wantIs != nil {
-				assert.ErrorIs(t, err, tc.wantIs)
+				require.ErrorIs(t, err, tc.wantIs)
 			}
 			assert.Equal(t, tc.wantSent, len(rt.describes) == 1)
 		})
@@ -246,7 +246,7 @@ func TestAlterQuotas_Errors(t *testing.T) {
 			err := newQuotaClient(t, rt).AlterQuotas(t.Context(), tc.entity, tc.set, tc.remove)
 			require.Error(t, err)
 			if tc.wantIs != nil {
-				assert.ErrorIs(t, err, tc.wantIs)
+				require.ErrorIs(t, err, tc.wantIs)
 			}
 			assert.Equal(t, tc.wantSent, len(rt.alters) == 1)
 		})
@@ -272,10 +272,10 @@ func TestCheckQuotaSupport(t *testing.T) {
 			err := newQuotaClient(t, rt).CheckQuotaSupport(t.Context())
 			switch {
 			case tc.wantIs != nil:
-				assert.ErrorIs(t, err, tc.wantIs)
+				require.ErrorIs(t, err, tc.wantIs)
 			case tc.wantErr:
 				require.Error(t, err)
-				assert.NotErrorIs(t, err, ErrQuotasUnsupported)
+				require.NotErrorIs(t, err, ErrQuotasUnsupported)
 			default:
 				assert.NoError(t, err)
 			}

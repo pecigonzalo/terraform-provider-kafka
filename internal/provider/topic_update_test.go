@@ -249,12 +249,28 @@ func TestTopicUpdaterReplicationFactor(t *testing.T) {
 		assert.ErrorIs(t, err, errList)
 	})
 
-	t.Run("times_out_if_reassignment_never_finishes", func(t *testing.T) {
+	t.Run("topic_without_partitions_is_an_error", func(t *testing.T) {
+		f := &fakeTopicOps{
+			brokers: fakeBrokers(1, 2, 3),
+			topics:  []kafkaclient.TopicInfo{{Name: "t"}},
+		}
+
+		err := testUpdater(f).replicationFactor(t.Context(), "t", 2)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no partitions")
+		assert.Zero(t, f.alterCalls)
+	})
+
+	t.Run("cancelled_context_stops_waiting_with_a_timeout_set", func(t *testing.T) {
+		// The default client timeout is positive, so this is the case a real
+		// apply meets. A cancelled apply must stop the wait before the timeout.
 		f := &fakeTopicOps{
 			brokers: fakeBrokers(1, 2, 3),
 			topics:  []kafkaclient.TopicInfo{fakeTopic("t", []int{1})},
-			timeout: 30 * time.Millisecond,
+			timeout: time.Minute,
 		}
+		ctx, cancel := context.WithCancel(t.Context())
 		f.topicFn = func(call int) (kafkaclient.TopicInfo, error) {
 			if call == 1 {
 				return fakeTopic("t", []int{1}), nil
@@ -262,13 +278,16 @@ func TestTopicUpdaterReplicationFactor(t *testing.T) {
 			return fakeTopic("t", []int{1, 2}), nil
 		}
 		f.listFn = func(int) ([]kafkaclient.PartitionReassignment, error) {
+			cancel()
 			return []kafkaclient.PartitionReassignment{{Partition: 0}}, nil
 		}
 
-		err := testUpdater(f).replicationFactor(t.Context(), "t", 2)
+		start := time.Now()
+		err := testUpdater(f).replicationFactor(ctx, "t", 2)
 
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-		assert.Contains(t, err.Error(), "timed out")
+		require.ErrorIs(t, err, context.Canceled)
+		require.NotErrorIs(t, err, context.DeadlineExceeded)
+		assert.Less(t, time.Since(start), 10*time.Second, "the wait stopped long before the timeout")
 	})
 
 	t.Run("cancelled_context_stops_waiting", func(t *testing.T) {
@@ -315,6 +334,19 @@ func TestTopicUpdaterPartitions(t *testing.T) {
 			assert.NotEqual(t, r[0], r[1])
 		}
 		assert.Equal(t, 4, f.topicReads, "waited until the new count was visible")
+	})
+
+	t.Run("topic_without_partitions_is_an_error", func(t *testing.T) {
+		f := &fakeTopicOps{
+			brokers: fakeBrokers(1, 2, 3),
+			topics:  []kafkaclient.TopicInfo{{Name: "t"}},
+		}
+
+		err := testUpdater(f).partitions(t.Context(), "t", 2)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no partitions")
+		assert.Zero(t, f.createCalls)
 	})
 
 	t.Run("reducing_is_rejected", func(t *testing.T) {

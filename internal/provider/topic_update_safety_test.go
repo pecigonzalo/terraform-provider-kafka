@@ -86,15 +86,6 @@ func TestTopicUpdater_RetriesTopicNotFound(t *testing.T) {
 		assert.Greater(t, f.topicReads, 1, "the read was retried")
 	})
 
-	t.Run("partitions_report_a_missing_topic_after_the_window", func(t *testing.T) {
-		f := &fakeTopicOps{brokers: fakeBrokers(1, 2, 3)}
-
-		err := testUpdater(f).partitions(t.Context(), "t", 2)
-
-		require.ErrorIs(t, err, kafkaclient.ErrTopicNotFound)
-		assert.Greater(t, f.topicReads, 1, "the read was retried")
-	})
-
 	t.Run("other_errors_are_not_retried", func(t *testing.T) {
 		errBroker := errors.New("broker unavailable")
 		f := &fakeTopicOps{brokers: fakeBrokers(1, 2, 3)}

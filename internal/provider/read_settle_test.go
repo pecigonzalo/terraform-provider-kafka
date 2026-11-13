@@ -123,15 +123,14 @@ func TestSettleTopicRead(t *testing.T) {
 	const interval, window = time.Millisecond, 2 * time.Second
 
 	tests := []struct {
-		name      string
-		results   []error
-		wantFound bool
-		wantErr   error
+		name    string
+		results []error
+		wantErr error
 	}{
-		{"found_at_once", []error{nil}, true, nil},
-		{"absent_briefly_then_present", []error{gone, gone, nil}, true, nil},
-		{"other_error_is_returned", []error{boom}, false, boom},
-		{"other_error_after_absence_is_returned", []error{gone, boom}, false, boom},
+		{"found_at_once", []error{nil}, nil},
+		{"absent_briefly_then_present", []error{gone, gone, nil}, nil},
+		{"other_error_is_returned", []error{boom}, boom},
+		{"other_error_after_absence_is_returned", []error{gone, boom}, boom},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,7 +147,7 @@ func TestSettleTopicRead(t *testing.T) {
 
 	t.Run("absent_consistently_is_gone", func(t *testing.T) {
 		s := &scriptedTopicReads{results: []error{gone}}
-		_, err := settleTopicRead(t.Context(), s.read, state, interval, 50*time.Millisecond)
+		_, err := settleTopicRead(t.Context(), s.read, state, interval, window)
 		require.ErrorIs(t, err, kafkaclient.ErrTopicNotFound)
 		require.GreaterOrEqual(t, s.calls, minAbsentChecks, "must check several times before reporting a deletion")
 	})
@@ -189,13 +188,27 @@ func TestSettleTopicRead(t *testing.T) {
 	})
 
 	t.Run("isolated_absences_while_unsettled_are_not_a_deletion", func(t *testing.T) {
-		// The topic never settles against state (partitions differ), so Read polls
-		// until the window ends. Absences never come five in a row, so it is not gone.
-		mismatch := &TopicResourceModel{Partitions: types.Int64Value(9), ReplicationFactor: types.Int64Null(), Config: types.MapNull(types.StringType)}
-		s := &scriptedTopicReads{results: []error{nil, nil, gone}, cycle: true}
-		info, err := settleTopicRead(t.Context(), s.read, mismatch, interval, 50*time.Millisecond)
+		// The topic does not match state (the partition count differs) and is
+		// missing every third time. The absences never come minAbsentChecks in
+		// a row, so the topic is not gone. After enough checks the topic matches
+		// state, so the call ends without waiting for the window.
+		mismatch := &TopicResourceModel{Partitions: types.Int64Value(1), ReplicationFactor: types.Int64Null(), Config: types.MapNull(types.StringType)}
+		calls := 0
+		read := func(context.Context) (kafkaclient.TopicInfo, error) {
+			calls++
+			switch {
+			case calls > 3*minAbsentChecks:
+				return kafkaclient.TopicInfo{Name: "t", Partitions: []kafkaclient.PartitionInfo{{ID: 0, Replicas: []int{1}}}}, nil
+			case calls%3 == 0:
+				return kafkaclient.TopicInfo{}, gone
+			default:
+				return kafkaclient.TopicInfo{Name: "t", Partitions: []kafkaclient.PartitionInfo{{ID: 0}, {ID: 1}}}, nil
+			}
+		}
+		info, err := settleTopicRead(t.Context(), read, mismatch, interval, window)
 		require.NoError(t, err)
-		require.Equal(t, "t", info.Name)
+		require.Len(t, info.Partitions, 1)
+		require.Greater(t, calls, 3*minAbsentChecks)
 	})
 }
 

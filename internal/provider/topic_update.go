@@ -355,16 +355,17 @@ func placementPartitions(topic kafkaclient.TopicInfo) []placement.Partition {
 }
 
 // replicaCount returns the replication factor of a topic. It returns an error
-// if the number of replicas differs across partitions, which also happens
-// while a reassignment is in progress.
+// if the topic has no partitions, because then it has no replication factor.
+// It also returns an error if the number of replicas differs across
+// partitions, which happens while a reassignment is in progress.
 func replicaCount(topic kafkaclient.TopicInfo) (int, error) {
-	count := -1
-	for _, p := range topic.Partitions {
-		if count == -1 {
-			count = len(p.Replicas)
-		}
+	if len(topic.Partitions) == 0 {
+		return 0, fmt.Errorf("topic %q has no partitions", topic.Name)
+	}
+	count := len(topic.Partitions[0].Replicas)
+	for _, p := range topic.Partitions[1:] {
 		if count != len(p.Replicas) {
-			return count, fmt.Errorf("the replica count isn't the same across partitions %d != %d", count, len(p.Replicas))
+			return 0, fmt.Errorf("the replica count isn't the same across partitions %d != %d", count, len(p.Replicas))
 		}
 	}
 	return count, nil

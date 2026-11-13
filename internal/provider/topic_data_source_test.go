@@ -5,8 +5,23 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestTopicDataSourceWithoutClient(t *testing.T) {
+	// The check for the client runs before the request is read, so an empty
+	// request is enough.
+	d := &topicDataSource{}
+	resp := &datasource.ReadResponse{}
+
+	d.Read(t.Context(), datasource.ReadRequest{}, resp)
+
+	require.True(t, resp.Diagnostics.HasError())
+	assert.Equal(t, missingClientSummary, resp.Diagnostics.Errors()[0].Summary())
+}
 
 func TestAccTopicDataSource(t *testing.T) {
 	resource.Test(t, resource.TestCase{

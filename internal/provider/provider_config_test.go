@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -8,7 +9,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -514,4 +517,85 @@ func TestGetEnv_EmptyIsUnset(t *testing.T) {
 	assert.Equal(t, "fallback", p.getEnv("SASL_MECHANISM", "fallback"))
 	t.Setenv("KAFKA_SASL_MECHANISM", "plain")
 	assert.Equal(t, "plain", p.getEnv("SASL_MECHANISM", "fallback"))
+}
+
+// configureWith runs Configure with the given values for the nested settings.
+// A nil value is a null attribute.
+func configureWith(t *testing.T, tlsValues, saslValues map[string]tftypes.Value, timeout tftypes.Value) *provider.ConfigureResponse {
+	t.Helper()
+	p := &kafkaProvider{typeName: "kafka"}
+
+	var schemaResp provider.SchemaResponse
+	p.Schema(t.Context(), provider.SchemaRequest{}, &schemaResp)
+	objectType, ok := schemaResp.Schema.Type().TerraformType(t.Context()).(tftypes.Object)
+	require.True(t, ok)
+
+	nested := func(name string, values map[string]tftypes.Value) tftypes.Value {
+		nestedType := objectType.AttributeTypes[name].(tftypes.Object)
+		all := map[string]tftypes.Value{}
+		for attr, attrType := range nestedType.AttributeTypes {
+			all[attr] = tftypes.NewValue(attrType, nil)
+		}
+		maps.Copy(all, values)
+		return tftypes.NewValue(nestedType, all)
+	}
+	raw := tftypes.NewValue(objectType, map[string]tftypes.Value{
+		"bootstrap_servers": tftypes.NewValue(objectType.AttributeTypes["bootstrap_servers"], []tftypes.Value{
+			tftypes.NewValue(tftypes.String, "broker:9092"),
+		}),
+		"tls":     nested("tls", tlsValues),
+		"sasl":    nested("sasl", saslValues),
+		"timeout": timeout,
+	})
+
+	resp := &provider.ConfigureResponse{}
+	p.Configure(t.Context(), provider.ConfigureRequest{
+		Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: raw},
+	}, resp)
+	return resp
+}
+
+func TestConfigure(t *testing.T) {
+	str := func(v string) tftypes.Value { return tftypes.NewValue(tftypes.String, v) }
+	boolean := func(v bool) tftypes.Value { return tftypes.NewValue(tftypes.Bool, v) }
+	nullTimeout := tftypes.NewValue(tftypes.Number, nil)
+
+	t.Run("plain_without_tls_creates_a_client_and_warns", func(t *testing.T) {
+		clearProviderEnv(t)
+		resp := configureWith(t,
+			map[string]tftypes.Value{"enabled": boolean(false)},
+			map[string]tftypes.Value{"mechanism": str("plain"), "username": str("user"), "password": str("pass")},
+			nullTimeout)
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+		assert.NotNil(t, resp.ResourceData)
+		assert.NotNil(t, resp.DataSourceData)
+	})
+
+	t.Run("missing_mechanism_is_an_error_and_creates_no_client", func(t *testing.T) {
+		clearProviderEnv(t)
+		resp := configureWith(t, nil, nil, nullTimeout)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "no SASL mechanism is set")
+		assert.Nil(t, resp.ResourceData)
+	})
+
+	t.Run("unknown_tls_enabled_is_an_error", func(t *testing.T) {
+		clearProviderEnv(t)
+		resp := configureWith(t,
+			map[string]tftypes.Value{"enabled": tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue)},
+			map[string]tftypes.Value{"enabled": boolean(false)},
+			nullTimeout)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "tls.enabled")
+	})
+
+	t.Run("unknown_mechanism_is_an_error_that_names_the_setting", func(t *testing.T) {
+		clearProviderEnv(t)
+		resp := configureWith(t, nil,
+			map[string]tftypes.Value{"mechanism": tftypes.NewValue(tftypes.String, tftypes.UnknownValue)},
+			nullTimeout)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "sasl.mechanism")
+	})
 }

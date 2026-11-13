@@ -37,12 +37,14 @@ const (
 	SASLMechanismAWSMSKIAM   SASLMechanism = "aws-msk-iam"
 )
 
-// SASLMechanismNames lists the mechanism names that the provider documents.
-var SASLMechanismNames = []string{
-	string(SASLMechanismPlain),
-	string(SASLMechanismScramSHA256),
-	string(SASLMechanismScramSHA512),
-	string(SASLMechanismAWSMSKIAM),
+// SASLMechanismNames returns the mechanism names that the provider documents.
+func SASLMechanismNames() []string {
+	return []string{
+		string(SASLMechanismPlain),
+		string(SASLMechanismScramSHA256),
+		string(SASLMechanismScramSHA512),
+		string(SASLMechanismAWSMSKIAM),
+	}
 }
 
 // ParseSASLMechanism normalises a user supplied mechanism name. It accepts
@@ -57,7 +59,7 @@ func ParseSASLMechanism(name string) (SASLMechanism, error) {
 		return m, nil
 	default:
 		if normalized == "" {
-			return "", fmt.Errorf("SASL mechanism is empty: choose one of %s", strings.Join(SASLMechanismNames, ", "))
+			return "", fmt.Errorf("SASL mechanism is empty: choose one of %s", strings.Join(SASLMechanismNames(), ", "))
 		}
 		return "", fmt.Errorf("unable to detect SASL mechanism: %q", name)
 	}

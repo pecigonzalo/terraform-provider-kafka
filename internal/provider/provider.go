@@ -178,6 +178,26 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		)
 	}
 
+	for _, setting := range []struct {
+		attribute string
+		unknown   bool
+	}{
+		{"tls.enabled", config.TLS.Enabled.IsUnknown()},
+		{"tls.skip_verify", config.TLS.SkipVerify.IsUnknown()},
+		{"sasl.enabled", config.SASL.Enabled.IsUnknown()},
+		{"sasl.mechanism", config.SASL.Mechanism.IsUnknown()},
+		{"timeout", config.Timeout.IsUnknown()},
+	} {
+		if setting.unknown {
+			resp.Diagnostics.AddAttributeError(
+				path.Root(strings.SplitN(setting.attribute, ".", 2)[0]),
+				"Unknown Kafka provider setting",
+				fmt.Sprintf("The provider cannot create the Kafka client because the value of %s is unknown. ", setting.attribute)+
+					"Either target apply the source of the value first, or set the value statically in the configuration.",
+			)
+		}
+	}
+
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -242,33 +262,24 @@ func (p *kafkaProvider) buildClientConfig(config kafkaProviderModel, diags *diag
 	clientConfig.BootstrapServer = bootstrapServer
 
 	// TLS is on unless you turn it off.
-	tlsEnabled, err := p.getEnvBool("TLS_ENABLED", true)
+	tlsEnabled, err := p.resolveBool(config.TLS.Enabled, "TLS_ENABLED", true)
 	if err != nil {
 		diags.AddError("Invalid Kafka provider environment variable", err.Error())
 		return clientConfig
 	}
-	if !config.TLS.Enabled.IsNull() {
-		tlsEnabled = config.TLS.Enabled.ValueBool()
-	}
-	tlsSkipVerify, err := p.getEnvBool("TLS_SKIP_VERIFY", false)
+	tlsSkipVerify, err := p.resolveBool(config.TLS.SkipVerify, "TLS_SKIP_VERIFY", false)
 	if err != nil {
 		diags.AddError("Invalid Kafka provider environment variable", err.Error())
 		return clientConfig
-	}
-	if !config.TLS.SkipVerify.IsNull() {
-		tlsSkipVerify = config.TLS.SkipVerify.ValueBool()
 	}
 	clientConfig.TLS.Enabled = tlsEnabled
 	clientConfig.TLS.SkipVerify = tlsSkipVerify
 
 	// SASL is on unless you turn it off.
-	saslEnabled, err := p.getEnvBool("SASL_ENABLED", true)
+	saslEnabled, err := p.resolveBool(config.SASL.Enabled, "SASL_ENABLED", true)
 	if err != nil {
 		diags.AddError("Invalid Kafka provider environment variable", err.Error())
 		return clientConfig
-	}
-	if !config.SASL.Enabled.IsNull() {
-		saslEnabled = config.SASL.Enabled.ValueBool()
 	}
 	if saslEnabled {
 		saslConfig, err := p.generateSASLConfig(config.SASL)
@@ -308,6 +319,20 @@ func (p *kafkaProvider) buildClientConfig(config kafkaProviderModel, diags *diag
 	return clientConfig
 }
 
+// resolveBool returns the configured value if it is set. Otherwise it returns
+// the value of the environment variable, or fallback if that is also not set.
+// An invalid environment value is an error even when the configuration is set.
+func (p *kafkaProvider) resolveBool(configured types.Bool, envKey string, fallback bool) (bool, error) {
+	fromEnv, err := p.getEnvBool(envKey, fallback)
+	if err != nil {
+		return false, err
+	}
+	if !configured.IsNull() {
+		return configured.ValueBool(), nil
+	}
+	return fromEnv, nil
+}
+
 // generateSASLConfig returns the SASL settings for the client, or an error.
 // Values set in the configuration take precedence over environment variables.
 // The mechanism has no default. The AWS MSK IAM mechanism signs with AWS
@@ -332,12 +357,12 @@ func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (*kafkaclient.S
 			"Set sasl.mechanism or the %s environment variable to one of: %s. "+
 			"The names scram-sha-256 and scram-sha-512 also work. "+
 			"To turn SASL off, set sasl = { enabled = false } or %s=false",
-			p.envVarName("SASL_MECHANISM"), strings.Join(kafkaclient.SASLMechanismNames, ", "),
+			p.envVarName("SASL_MECHANISM"), strings.Join(kafkaclient.SASLMechanismNames(), ", "),
 			p.envVarName("SASL_ENABLED"))
 	}
 	parsed, err := kafkaclient.ParseSASLMechanism(mechanism)
 	if err != nil {
-		return nil, fmt.Errorf("%w. Use one of: %s", err, strings.Join(kafkaclient.SASLMechanismNames, ", "))
+		return nil, fmt.Errorf("%w. Use one of: %s", err, strings.Join(kafkaclient.SASLMechanismNames(), ", "))
 	}
 
 	if parsed == kafkaclient.SASLMechanismAWSMSKIAM {

@@ -71,6 +71,8 @@ type secureClusterInfo struct {
 	LimitedPassword string
 
 	container *dockertest.Resource
+	// killTimer kills the container if the test process lives too long.
+	killTimer *time.Timer
 
 	readyOnce sync.Once
 	readyErr  error
@@ -143,7 +145,9 @@ func startSecureCluster(pool *dockertest.Pool, suffix string) (*secureClusterInf
 	}
 	// Kill the container if it lives longer than the test run, as for the main
 	// cluster.
-	time.AfterFunc(orphanExpirySeconds*time.Second, func() { _ = pool.Client.KillContainer(docker.KillContainerOptions{ID: container.ID}) })
+	info.killTimer = time.AfterFunc(orphanExpirySeconds*time.Second, func() {
+		_ = pool.Client.KillContainer(docker.KillContainerOptions{ID: container.ID})
+	})
 	return info, nil
 }
 
@@ -152,14 +156,21 @@ func (c *secureClusterInfo) stop(pool *dockertest.Pool) {
 	if c == nil || c.container == nil {
 		return
 	}
+	if c.killTimer != nil {
+		c.killTimer.Stop()
+	}
 	if err := pool.Purge(c.container); err != nil {
 		fmt.Printf("Could not purge secured broker: %s\n", err)
 	}
 }
 
 func ensureImage(pool *dockertest.Pool, repository, tag string) error {
-	if _, err := pool.Client.InspectImage(repository + ":" + tag); err == nil {
+	_, err := pool.Client.InspectImage(repository + ":" + tag)
+	if err == nil {
 		return nil
+	}
+	if !errors.Is(err, docker.ErrNoSuchImage) {
+		return fmt.Errorf("inspect %s:%s: %w", repository, tag, err)
 	}
 	if err := pool.Client.PullImage(docker.PullImageOptions{Repository: repository, Tag: tag}, docker.AuthConfiguration{}); err != nil {
 		return fmt.Errorf("pull %s:%s: %w", repository, tag, err)

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -61,13 +62,23 @@ func deleteTopicOutsideTerraform(t *testing.T, topic string) {
 	waitForTopicGone(t, topic)
 }
 
-// waitForTopicGone fails the test unless every broker stops reporting the topic.
+// waitForTopicGone fails the test unless every broker stops reporting the
+// topic. It asks for the topic configuration, which never creates a topic. A
+// metadata request could create it again if the cluster allows that.
 func waitForTopicGone(t *testing.T, topic string) {
 	t.Helper()
 
 	for address := range strings.SplitSeq(os.Getenv("KAFKA_BOOTSTRAP_SERVERS"), ",") {
-		require.Eventually(t, func() bool { return topicVisible(address, topic) != nil },
-			30*time.Second, 200*time.Millisecond, "broker %s still reports topic %q", address, topic)
+		client := &kafka.Client{Addr: kafka.TCP(address), Timeout: 10 * time.Second}
+		require.Eventually(t, func() bool {
+			resp, err := client.DescribeConfigs(t.Context(), &kafka.DescribeConfigsRequest{
+				Resources: []kafka.DescribeConfigRequestResource{{
+					ResourceType: kafka.ResourceTypeTopic,
+					ResourceName: topic,
+				}},
+			})
+			return err == nil && len(resp.Resources) == 1 && errors.Is(resp.Resources[0].Error, kafka.UnknownTopicOrPartition)
+		}, 30*time.Second, 200*time.Millisecond, "broker %s still reports topic %q", address, topic)
 	}
 }
 

@@ -19,6 +19,16 @@ import (
 // changes be tested on real replicas.
 const clusterBrokers = 3
 
+// brokerRack returns the rack of broker id. The racks are uneven on purpose:
+// brokers 0 and 1 share rack AZ0 and broker 2 is alone in AZ1, so replica
+// placement has to spread over two racks with a different number of brokers.
+func brokerRack(id int) string {
+	if id < 2 {
+		return "AZ0"
+	}
+	return "AZ1"
+}
+
 // runCluster starts n Kafka brokers in KRaft mode on the test network, all
 // voting in one controller quorum. Each broker is reachable from the host on its
 // own port, and the brokers reach each other by container hostname. It exports
@@ -59,7 +69,7 @@ func runCluster(m *testing.M, pool *dockertest.Pool, networkID, suffix string, n
 			Tag:        "3.9.1",
 			Env: []string{
 				fmt.Sprintf("KAFKA_NODE_ID=%d", i),
-				fmt.Sprintf("KAFKA_BROKER_RACK=AZ%d", i),
+				"KAFKA_BROKER_RACK=" + brokerRack(i),
 				"KAFKA_PROCESS_ROLES=broker,controller",
 				"KAFKA_CONTROLLER_QUORUM_VOTERS=" + strings.Join(voters, ","),
 				"KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER",

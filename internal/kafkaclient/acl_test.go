@@ -195,6 +195,10 @@ func TestACLValidate(t *testing.T) {
 		{"principal_empty_name", mod(func(a *ACL) { a.Principal = "User:" }), true},
 		{"empty_host", mod(func(a *ACL) { a.Host = "" }), true},
 		{"partial_wildcard_host", mod(func(a *ACL) { a.Host = "10.0.*" }), true},
+		{"network_range_host", mod(func(a *ACL) { a.Host = "10.0.0.0/8" }), true},
+		{"ipv6_host", mod(func(a *ACL) { a.Host = "2001:db8::1" }), false},
+		{"lower_case_user_principal", mod(func(a *ACL) { a.Principal = "user:alice" }), true},
+		{"custom_principal_type", mod(func(a *ACL) { a.Principal = "Group:admins" }), false},
 		{"prefixed_wildcard", mod(func(a *ACL) { a.PatternType = ACLPatternTypePrefixed; a.ResourceName = "*" }), true},
 		{"cluster_wrong_name", mod(func(a *ACL) {
 			a.ResourceType = ACLResourceTypeCluster
@@ -463,4 +467,134 @@ func TestDeleteACLs(t *testing.T) {
 			assert.Nil(t, rt.gotDelete, name)
 		}
 	})
+}
+
+func TestACLFilterCheckConsistency(t *testing.T) {
+	tests := []struct {
+		name    string
+		filter  ACLFilter
+		wantErr string // empty means valid
+	}{
+		{"empty", ACLFilter{}, ""},
+		{"topic_read", ACLFilter{ResourceType: ACLResourceTypeTopic, Operation: ACLOperationRead}, ""},
+		{"any_resource_type_any_operation", ACLFilter{ResourceType: ACLResourceTypeAny, Operation: ACLOperationIdempotentWrite}, ""},
+		{"operation_without_resource_type", ACLFilter{Operation: ACLOperationClusterAction}, ""},
+		{"cluster_default_name", ACLFilter{ResourceType: ACLResourceTypeCluster, ResourceName: ClusterResourceName}, ""},
+		{"cluster_match_pattern", ACLFilter{ResourceType: ACLResourceTypeCluster, PatternType: ACLPatternTypeMatch}, ""},
+		{"prefixed_topic", ACLFilter{ResourceType: ACLResourceTypeTopic, ResourceName: "app.", PatternType: ACLPatternTypePrefixed}, ""},
+		{"cluster_other_name", ACLFilter{ResourceType: ACLResourceTypeCluster, ResourceName: "x"}, "must be"},
+		{"cluster_prefixed", ACLFilter{ResourceType: ACLResourceTypeCluster, PatternType: ACLPatternTypePrefixed}, "no prefixed ACLs"},
+		{"prefixed_wildcard", ACLFilter{ResourceName: "*", PatternType: ACLPatternTypePrefixed}, "wildcard"},
+		{"group_write", ACLFilter{ResourceType: ACLResourceTypeGroup, Operation: ACLOperationWrite}, "not valid for resource type"},
+		{"topic_cluster_action", ACLFilter{ResourceType: ACLResourceTypeTopic, Operation: ACLOperationClusterAction}, "not valid for resource type"},
+		{"bad_principal", ACLFilter{Principal: "alice"}, "Type:name"},
+		{"bad_host", ACLFilter{Host: "10.*"}, "wildcard"},
+		{"unknown_enum", ACLFilter{Operation: "poke"}, "unknown operation"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.filter.CheckConsistency()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidACL)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestValidateHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		host    string
+		wantErr string // empty means valid
+	}{
+		{"wildcard", "*", ""},
+		{"ipv4", "10.0.0.1", ""},
+		{"ipv4_loopback", "127.0.0.1", ""},
+		{"ipv6", "2001:db8::1", ""},
+		{"ipv6_loopback", "::1", ""},
+		{"ipv4_mapped_ipv6", "::ffff:10.0.0.1", ""},
+		{"empty", "", "must not be empty"},
+		{"ipv4_range", "10.0.0.0/8", "does not support network ranges"},
+		{"ipv6_range", "2001:db8::/32", "does not support network ranges"},
+		{"partial_wildcard", "10.0.*", "does not support network ranges"},
+		{"host_name", "broker1.example.com", "must be \"*\" or an IP address"},
+		{"ipv4_too_few_parts", "10.0.0", "must be \"*\" or an IP address"},
+		{"ipv4_too_many_parts", "10.0.0.1.5", "must be \"*\" or an IP address"},
+		{"ipv4_out_of_range", "256.0.0.1", "must be \"*\" or an IP address"},
+		{"with_port", "10.0.0.1:9092", "must be \"*\" or an IP address"},
+		{"with_space", " 10.0.0.1", "must be \"*\" or an IP address"},
+		{"bracketed_ipv6", "[::1]", "must be \"*\" or an IP address"},
+		{"two_wildcards", "**", "must be \"*\" or an IP address"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateHost(tc.host)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidACL)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestValidatePrincipal(t *testing.T) {
+	tests := []struct {
+		name      string
+		principal string
+		wantErr   string // empty means valid
+	}{
+		{"user", "User:alice", ""},
+		{"user_wildcard", "User:*", ""},
+		{"custom_type", "Group:admins", ""},
+		{"custom_type_lower_case", "service:billing", ""},
+		{"name_with_colon", "User:CN=alice:team", ""},
+		{"name_with_spaces", "User:CN=Alice Smith,OU=Dev", ""},
+		{"empty", "", "must not be empty"},
+		{"no_colon", "alice", "Type:name"},
+		{"empty_type", ":alice", "Type:name"},
+		{"empty_name", "User:", "Type:name"},
+		{"only_colon", ":", "Type:name"},
+		{"lower_case_user", "user:alice", `write "User:alice"`},
+		{"upper_case_user", "USER:alice", `write "User:alice"`},
+		{"mixed_case_user", "uSER:alice:team", `write "User:alice:team"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePrincipal(tc.principal)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidACL)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestACLFilterUsesHostAndPrincipalRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		filter  ACLFilter
+		wantErr bool
+	}{
+		{"ip_host", ACLFilter{Host: "10.0.0.1"}, false},
+		{"range_host", ACLFilter{Host: "10.0.0.0/8"}, true},
+		{"user_principal", ACLFilter{Principal: "User:alice"}, false},
+		{"wrong_case_principal", ACLFilter{Principal: "user:alice"}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.filter.Validate()
+			if tc.wantErr {
+				assert.ErrorIs(t, err, ErrInvalidACL)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
 }

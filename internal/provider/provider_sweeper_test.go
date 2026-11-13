@@ -57,6 +57,16 @@ func run(m *testing.M) int {
 		}
 	}()
 
+	// The secured cluster boots while the main one does; tests wait for it
+	// when they need it.
+	secure, err := startSecureCluster(pool, suffix)
+	if err != nil {
+		log.Printf("Could not start the secured cluster: %s", err)
+		return 1
+	}
+	defer secure.stop(pool)
+	secureCluster = secure
+
 	return runCluster(m, pool, network.Network.ID, suffix, clusterBrokers)
 }
 

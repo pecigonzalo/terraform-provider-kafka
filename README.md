@@ -3,7 +3,7 @@
 A Terraform provider for Kafka powered by [kafka-go](https://github.com/segmentio/kafka-go).
 
 ## State
-- [ ] Migrate to use `kafka-go` directly instead of `topicctl` wrappers
+- [x] Migrate to use `kafka-go` directly instead of `topicctl` wrappers
 - [x] Authentication
   - [x] SASL
     - [x] IAM

@@ -10,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/segmentio/topicctl/pkg/admin"
 
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
@@ -114,7 +113,7 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		return
 	}
 
-	replicationFactor, err := kafkaclientReplicaCount(topicInfo)
+	replicationFactor, err := replicaCount(topicInfo)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to get replica count, got error: %s", err))
 		return
@@ -124,8 +123,8 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	data.Name = types.StringValue(topicInfo.Name)
 	data.Partitions = types.Int64Value(int64(len(topicInfo.Partitions)))
 	data.ReplicationFactor = types.Int64Value(int64(replicationFactor))
-	// The attribute is kept for compatibility. topicctl never populated the
-	// topic version, so it has always been 0; the kafkaclient reports none.
+	// The attribute is kept for compatibility. The topic version has
+	// always been 0 and the kafkaclient reports none.
 	data.Version = types.Int64Value(0)
 
 	configElement := make(map[string]attr.Value)
@@ -143,15 +142,4 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 
 	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-// kafkaclientReplicaCount applies replicaCount to a topic read through
-// kafkaclient, so the data source and the resource share one definition of the
-// replication factor until the resource is moved over as well.
-func kafkaclientReplicaCount(topicInfo kafkaclient.TopicInfo) (int, error) {
-	partitions := make([]admin.PartitionInfo, 0, len(topicInfo.Partitions))
-	for _, p := range topicInfo.Partitions {
-		partitions = append(partitions, admin.PartitionInfo{ID: p.ID, Replicas: p.Replicas})
-	}
-	return replicaCount(admin.TopicInfo{Name: topicInfo.Name, Partitions: partitions})
 }

@@ -3,7 +3,6 @@ package provider
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -11,7 +10,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestAccTopicResource(t *testing.T) {
@@ -87,54 +85,6 @@ resource "kafka_topic" "test" {
   replication_factor = %v
 }
 `, name, partitions, replication_factor)
-}
-
-func TestIncreaseReplicas(t *testing.T) {
-	tests := []struct {
-		name     string
-		desired  int
-		replicas []int
-		brokers  []int
-		want     []int
-	}{
-		{"adds_missing_broker", 3, []int{2, 1}, []int{1, 2, 3}, []int{2, 1, 3}},
-		{"no_change_when_at_desired", 2, []int{2, 1}, []int{1, 2, 3}, []int{2, 1}},
-		{"limited_by_available_brokers", 5, []int{1}, []int{1, 2}, []int{1, 2}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			input := slices.Clone(tc.replicas)
-			got := increaseReplicas(tc.desired, input, tc.brokers)
-			require.Equal(t, tc.want, got)
-			require.Equal(t, tc.replicas, input, "input must not be modified")
-		})
-	}
-}
-
-func TestReduceReplicas(t *testing.T) {
-	tests := []struct {
-		name     string
-		desired  int
-		replicas []int
-		leader   int
-		want     []int
-	}{
-		{"keeps_leader_first", 1, []int{2, 1, 3}, 2, []int{2}},
-		{"keeps_leader_last", 1, []int{1, 3, 2}, 2, []int{2}},
-		{"drops_from_end", 2, []int{2, 1, 3}, 2, []int{2, 1}},
-		{"larger_set", 2, []int{2, 1, 3, 5, 4}, 2, []int{2, 1}},
-		{"leader_in_middle", 2, []int{1, 2, 3, 4}, 2, []int{1, 2}},
-		{"unknown_leader", 2, []int{1, 2, 3}, -1, []int{1, 2}},
-		{"no_change_when_at_desired", 3, []int{1, 2, 3}, 1, []int{1, 2, 3}},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			input := slices.Clone(tc.replicas)
-			got := reduceReplicas(tc.desired, input, tc.leader)
-			require.Equal(t, tc.want, got)
-			require.Equal(t, tc.replicas, input, "input must not be modified")
-		})
-	}
 }
 
 func TestConfigMap(t *testing.T) {

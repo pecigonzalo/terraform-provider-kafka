@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -18,11 +17,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	kafka "github.com/segmentio/kafka-go"
-	"github.com/segmentio/topicctl/pkg/admin"
-	"github.com/segmentio/topicctl/pkg/apply/assigners"
-	"github.com/segmentio/topicctl/pkg/apply/extenders"
-	"github.com/segmentio/topicctl/pkg/apply/pickers"
 
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
@@ -44,12 +38,11 @@ func NewTopicResource() resource.Resource {
 
 // topicResource defines the resource implementation.
 //
-// Create, read, delete and configuration updates go through kafka. Changing
-// the replication factor or growing the partition count still uses topicctl's
-// placement logic and is the only remaining user of the topicctl client.
+// Every operation goes through kafka. Changing the replication factor or
+// growing the partition count computes the new placement with the placement
+// package and applies it through the same client.
 type topicResource struct {
-	kafka    *kafkaclient.Client
-	topicctl *admin.BrokerAdminClient
+	kafka *kafkaclient.Client
 }
 
 // TopicResourceModel describes the resource data model.
@@ -120,19 +113,18 @@ func (r *topicResource) Configure(_ context.Context, req resource.ConfigureReque
 		return
 	}
 
-	clients, ok := req.ProviderData.(*resourceClients)
+	client, ok := req.ProviderData.(*kafkaclient.Client)
 
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *provider.resourceClients, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *kafkaclient.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 
 		return
 	}
 
-	r.kafka = clients.kafka
-	r.topicctl = clients.topicctl
+	r.kafka = client
 }
 
 // ModifyPlan rejects changes Kafka cannot apply, so they fail at plan time
@@ -263,7 +255,7 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		return
 	}
 
-	replicationFactor, err := kafkaclientReplicaCount(topicInfo)
+	replicationFactor, err := replicaCount(topicInfo)
 	if err != nil {
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to get replica count, got error: %s", err))
 		return
@@ -292,22 +284,6 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	}
 }
 
-// replicaCount returns the replication_factor for a partition
-// Returns an error if it cannot determine the count, or if the number of
-// replicas is different across partitions
-func replicaCount(topicInfo admin.TopicInfo) (int, error) {
-	count := -1
-	for _, p := range topicInfo.Partitions {
-		if count == -1 {
-			count = len(p.Replicas)
-		}
-		if count != len(p.Replicas) {
-			return count, fmt.Errorf("the replica count isn't the same across partitions %d != %d", count, len(p.Replicas))
-		}
-	}
-	return count, nil
-}
-
 func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	// Read Terraform plan data into the model
 	var data *TopicResourceModel
@@ -330,7 +306,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	if !data.ReplicationFactor.Equal(state.ReplicationFactor) {
 		tflog.Info(ctx, "Updating topic replication factor")
-		err := r.updateReplicationFactor(ctx, data)
+		err := newTopicUpdater(r.kafka).replicationFactor(ctx, data.Name.ValueString(), int(data.ReplicationFactor.ValueInt64()))
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic replication factor, got error: %s", err))
 			return
@@ -338,7 +314,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	}
 	if !data.Partitions.Equal(state.Partitions) {
 		tflog.Info(ctx, "Updating topic partitions")
-		err := r.updatePartitions(ctx, data)
+		err := newTopicUpdater(r.kafka).partitions(ctx, data.Name.ValueString(), int(data.Partitions.ValueInt64()))
 		if err != nil {
 			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic partitions, got error: %s", err))
 			return
@@ -365,286 +341,6 @@ func configMap(config types.Map) map[string]string {
 		out[k] = str.ValueString()
 	}
 	return out
-}
-
-func (r *topicResource) updateReplicationFactor(ctx context.Context, data *TopicResourceModel) error {
-	brokerIDs, err := r.topicctl.GetBrokerIDs(ctx)
-	if err != nil {
-		return err
-	}
-
-	if data.ReplicationFactor.ValueInt64() > int64(len(brokerIDs)) {
-		return fmt.Errorf("replication factor cannot be higher than the number of brokers")
-	}
-
-	topicInfo, err := r.topicctl.GetTopic(ctx, data.Name.ValueString(), false)
-	if err != nil {
-		return err
-	}
-	brokersInfo, err := r.topicctl.GetBrokers(ctx, brokerIDs)
-	if err != nil {
-		return err
-	}
-
-	// Don't include the topic for this applier since the picker already considers
-	// broker placement within the topic and, also, the placement might change during
-	// the apply process.
-	nonAppliedTopics := []admin.TopicInfo{}
-	topics, err := r.topicctl.GetTopics(ctx, nil, false)
-	if err != nil {
-		return err
-	}
-	for _, topic := range topics {
-		if topic.Name != data.Name.ValueString() {
-			nonAppliedTopics = append(
-				nonAppliedTopics,
-				topic,
-			)
-		}
-	}
-
-	// Use the live replica count, not state, which may be stale
-	replicasPresent64, err := replicaCount(topicInfo)
-	if err != nil {
-		return err
-	}
-	replicasWanted := data.ReplicationFactor.ValueInt64()
-	replicasPresent := int64(replicasPresent64)
-	if replicasWanted == replicasPresent {
-		return nil
-	}
-
-	var newPartitionsInfo []admin.PartitionInfo
-	for _, partition := range topicInfo.Partitions {
-		if replicasWanted > replicasPresent {
-			// Add replicas
-			partition.Replicas = increaseReplicas(int(replicasWanted), partition.Replicas, brokerIDs)
-			newPartitionsInfo = append(newPartitionsInfo, partition)
-		} else if replicasWanted < replicasPresent {
-			// Removing replicas
-			partition.Replicas = reduceReplicas(int(replicasWanted), partition.Replicas, partition.Leader)
-			newPartitionsInfo = append(newPartitionsInfo, partition)
-		} else {
-			return fmt.Errorf("unable to identify replica factor change type")
-		}
-	}
-	topicInfo.Partitions = newPartitionsInfo
-	newAssignments := topicInfo.ToAssignments()
-
-	picker := pickers.NewClusterUsePicker(brokersInfo, nonAppliedTopics)
-	assigner := assigners.NewCrossRackAssigner(brokersInfo, picker)
-
-	assignments, err := assigner.Assign(data.Name.ValueString(), newAssignments)
-	if err != nil {
-		return err
-	}
-
-	apiAssignments := []kafka.AlterPartitionReassignmentsRequestAssignment{}
-	for _, assignment := range assignments {
-		apiAssignment := kafka.AlterPartitionReassignmentsRequestAssignment{
-			PartitionID: assignment.ID,
-			BrokerIDs:   assignment.Replicas,
-		}
-		apiAssignments = append(apiAssignments, apiAssignment)
-	}
-	alterPartitionReassignmentsRequest := kafka.AlterPartitionReassignmentsRequest{
-		Topic:       data.Name.ValueString(),
-		Assignments: apiAssignments,
-		// Without a timeout the broker gets timeoutMs=0 and fails the request
-		// with REQUEST_TIMED_OUT before the reassignment is accepted.
-		Timeout: r.topicctl.GetConnector().KafkaClient.Timeout,
-	}
-
-	tflog.Info(ctx, fmt.Sprintf("%v", alterPartitionReassignmentsRequest.Assignments))
-
-	clientResp, err := r.topicctl.GetConnector().KafkaClient.AlterPartitionReassignments(ctx, &alterPartitionReassignmentsRequest)
-	if err != nil {
-		return err
-	}
-	if clientResp.Error != nil {
-		return clientResp.Error
-	}
-	if len(clientResp.PartitionResults) > 0 {
-		partErrors := []error{}
-		for _, partResult := range clientResp.PartitionResults {
-			if partResult.Error != nil {
-				partErrors = append(partErrors, partResult.Error)
-			}
-		}
-		if len(partErrors) > 0 {
-			return fmt.Errorf("errors changing replication factor: %s", partErrors)
-		}
-	}
-
-	// The reassignment is asynchronous. Wait for it to finish so that the
-	// next Read and the saved state reflect the cluster, not the plan.
-	waitCtx := ctx
-	timeout := r.topicctl.GetConnector().KafkaClient.Timeout
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-	err = pollUntil(waitCtx, reassignmentPollInterval, func(ctx context.Context) (bool, error) {
-		return r.replicaReassignmentDone(ctx, data.Name.ValueString(), int(data.ReplicationFactor.ValueInt64()))
-	})
-	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf(
-			"timed out after %s waiting for Kafka to finish reassigning replicas of topic %q to replication factor %d; "+
-				"the reassignment may still be in progress, so run terraform plan again to refresh the actual state: %w",
-			timeout, data.Name.ValueString(), data.ReplicationFactor.ValueInt64(), err,
-		)
-	}
-	if err != nil {
-		return fmt.Errorf("waiting for replica reassignment of topic %q: %w", data.Name.ValueString(), err)
-	}
-	return nil
-}
-
-// replicaReassignmentDone reports whether every partition of the topic has the
-// desired replica count and no partition reassignment is still in progress.
-func (r *topicResource) replicaReassignmentDone(ctx context.Context, topic string, replicationFactor int) (bool, error) {
-	topicInfo, err := r.topicctl.GetTopic(ctx, topic, false)
-	if err != nil {
-		return false, err
-	}
-
-	partitionIDs := make([]int, 0, len(topicInfo.Partitions))
-	for _, partition := range topicInfo.Partitions {
-		if len(partition.Replicas) != replicationFactor {
-			return false, nil
-		}
-		partitionIDs = append(partitionIDs, partition.ID)
-	}
-
-	listResp, err := r.topicctl.GetConnector().KafkaClient.ListPartitionReassignments(ctx, &kafka.ListPartitionReassignmentsRequest{
-		Topics: map[string]kafka.ListPartitionReassignmentsRequestTopic{
-			topic: {PartitionIndexes: partitionIDs},
-		},
-	})
-	if err != nil {
-		return false, err
-	}
-	if listResp.Error != nil {
-		return false, listResp.Error
-	}
-	return len(listResp.Topics[topic].Partitions) == 0, nil
-}
-
-// increaseReplicas returns a new replica list grown to the desired size using
-// brokers not already hosting a replica. The input slice is not modified.
-func increaseReplicas(desired int, replicas []int, brokerIDs []int) []int {
-	newReplicas := slices.Clone(replicas)
-	for _, id := range brokerIDs {
-		if len(newReplicas) >= desired {
-			break
-		}
-		if !slices.Contains(newReplicas, id) {
-			newReplicas = append(newReplicas, id)
-		}
-	}
-	return newReplicas
-}
-
-// reduceReplicas returns a new replica list shrunk to the desired size. The
-// leader is always kept; other replicas are dropped from the end of the list.
-// The input slice is not modified.
-func reduceReplicas(desired int, replicas []int, leader int) []int {
-	newReplicas := slices.Clone(replicas)
-	for i := len(newReplicas) - 1; i >= 0 && len(newReplicas) > desired; i-- {
-		if newReplicas[i] == leader {
-			continue
-		}
-		newReplicas = slices.Delete(newReplicas, i, i+1)
-	}
-	return newReplicas
-}
-
-func (r *topicResource) updatePartitions(ctx context.Context, data *TopicResourceModel) error {
-	brokerIDs, err := r.topicctl.GetBrokerIDs(ctx)
-	if err != nil {
-		return err
-	}
-	brokersInfo, err := r.topicctl.GetBrokers(ctx, brokerIDs)
-	if err != nil {
-		return err
-	}
-	topicInfo, err := r.topicctl.GetTopic(ctx, data.Name.ValueString(), false)
-	if err != nil {
-		return err
-	}
-
-	// Use the live partition count, not state, which may be stale
-	currentPartitions := len(topicInfo.Partitions)
-	if int(data.Partitions.ValueInt64()) < currentPartitions {
-		return fmt.Errorf("partition count can't be reduced from %d to %d", currentPartitions, data.Partitions.ValueInt64())
-	}
-	extraPartitions := int(data.Partitions.ValueInt64()) - currentPartitions
-	if extraPartitions == 0 {
-		return nil
-	}
-
-	currAssignments := topicInfo.ToAssignments()
-	for _, b := range brokersInfo {
-		tflog.Debug(ctx, fmt.Sprintf("Broker ID: %v Rack: %s", b.ID, b.Rack))
-	}
-	picker := pickers.NewRandomizedPicker()
-	extender := extenders.NewBalancedExtender(
-		brokersInfo,
-		false,
-		picker,
-	)
-	desiredAssignments, err := extender.Extend(
-		data.Name.ValueString(),
-		currAssignments,
-		extraPartitions,
-	)
-	if err != nil {
-		return err
-	}
-	desiredAssignments = desiredAssignments[len(desiredAssignments)-extraPartitions:]
-
-	tflog.Info(ctx, fmt.Sprintf("Assignments: %v", desiredAssignments))
-
-	err = r.topicctl.AddPartitions(ctx, data.Name.ValueString(), desiredAssignments)
-	if err != nil {
-		return err
-	}
-
-	return r.waitForPartitions(ctx, data.Name.ValueString(), int(data.Partitions.ValueInt64()))
-}
-
-// waitForPartitions waits until the topic reports at least the wanted number of
-// partitions. The client caches topic metadata for several seconds, so a Read
-// straight after adding partitions can still see the old count; waiting here
-// makes the saved state and anything reading the topic afterwards agree.
-func (r *topicResource) waitForPartitions(ctx context.Context, topic string, want int) error {
-	waitCtx := ctx
-	timeout := r.topicctl.GetConnector().KafkaClient.Timeout
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
-
-	err := pollUntil(waitCtx, partitionPollInterval, func(ctx context.Context) (bool, error) {
-		info, err := r.topicctl.GetTopic(ctx, topic, false)
-		if err != nil {
-			return false, err
-		}
-		return len(info.Partitions) >= want, nil
-	})
-	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf(
-			"timed out after %s waiting for topic %q to report %d partitions; "+
-				"the partitions were added, so run terraform plan again to refresh the actual state: %w",
-			timeout, topic, want, err,
-		)
-	}
-	if err != nil {
-		return fmt.Errorf("waiting for partitions of topic %q: %w", topic, err)
-	}
-	return nil
 }
 
 func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

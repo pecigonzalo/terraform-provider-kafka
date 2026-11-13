@@ -45,9 +45,8 @@ type PartitionInfo struct {
 
 // TopicInfo describes a topic.
 //
-// Config holds the topic's explicitly set configuration, as topicctl did:
-// entries that only reflect broker defaults or static broker configuration
-// are omitted. Sensitive entries with a withheld value are reported as
+// Config holds the topic's explicitly set configuration: entries that only
+// reflect broker defaults or static broker configuration are omitted. Sensitive entries with a withheld value are reported as
 // "SENSITIVE". Partitions are ordered by partition ID.
 type TopicInfo struct {
 	Name       string

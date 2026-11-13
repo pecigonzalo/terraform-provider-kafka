@@ -21,7 +21,6 @@
                 goreleaser
                 gnumake
                 terraform
-                topicctl
                 kcat
                 apacheKafka
               ];

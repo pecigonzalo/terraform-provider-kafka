@@ -8,6 +8,20 @@ linters:
     - errorlint
     - misspell
     - modernize
+    - gosec
+    - bodyclose
+    - contextcheck
+    - testifylint
+
+  exclusions:
+    rules:
+      # Tests convert small constants to int16 for fake broker responses. Tests
+      # also use a fixed seed on purpose, so a failure repeats. Neither case
+      # handles real data or secrets.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "G115|G404"
 
 formatters:
   enable:

@@ -14,6 +14,18 @@ import (
 	"time"
 )
 
+// MaxDialTimeout is the longest time the provider waits to open one
+// connection to a broker. A longer provider timeout does not raise it. Without
+// this limit, one broker that cannot be reached stops every operation for the
+// whole provider timeout.
+const MaxDialTimeout = 30 * time.Second
+
+// DialTimeoutFor returns the dial timeout for a provider timeout: the smaller
+// of the two values.
+func DialTimeoutFor(timeout time.Duration) time.Duration {
+	return min(timeout, MaxDialTimeout)
+}
+
 // SASLMechanism is a normalised SASL mechanism name.
 type SASLMechanism string
 
@@ -25,9 +37,15 @@ const (
 	SASLMechanismAWSMSKIAM   SASLMechanism = "aws-msk-iam"
 )
 
-// DefaultSASLMechanism is the mechanism the provider uses when SASL is
-// enabled and no mechanism is configured.
-const DefaultSASLMechanism = SASLMechanismAWSMSKIAM
+// SASLMechanismNames returns the mechanism names that the provider documents.
+func SASLMechanismNames() []string {
+	return []string{
+		string(SASLMechanismPlain),
+		string(SASLMechanismScramSHA256),
+		string(SASLMechanismScramSHA512),
+		string(SASLMechanismAWSMSKIAM),
+	}
+}
 
 // ParseSASLMechanism normalises a user supplied mechanism name. It accepts
 // both the "scram-sha256" and "scram-sha-256" spellings, ignores case and
@@ -40,6 +58,9 @@ func ParseSASLMechanism(name string) (SASLMechanism, error) {
 	case SASLMechanismPlain, SASLMechanismScramSHA256, SASLMechanismScramSHA512, SASLMechanismAWSMSKIAM:
 		return m, nil
 	default:
+		if normalized == "" {
+			return "", fmt.Errorf("SASL mechanism is empty: choose one of %s", strings.Join(SASLMechanismNames(), ", "))
+		}
 		return "", fmt.Errorf("unable to detect SASL mechanism: %q", name)
 	}
 }
@@ -56,7 +77,7 @@ type TLSConfig struct {
 // (a nil pointer) disables SASL.
 type SASLConfig struct {
 	// Mechanism is the mechanism name as accepted by [ParseSASLMechanism].
-	// An empty value selects [DefaultSASLMechanism].
+	// It is required: there is no default.
 	Mechanism string
 	// Username is used by plain and scram mechanisms.
 	Username string
@@ -80,8 +101,11 @@ type Config struct {
 	TLS TLSConfig
 	// SASL configures authentication; nil disables SASL.
 	SASL *SASLConfig
-	// Timeout bounds dialing and each request. Zero uses kafka-go defaults.
+	// Timeout bounds each request. Zero uses kafka-go defaults.
 	Timeout time.Duration
+	// DialTimeout bounds the time to open one connection to a broker. Zero
+	// uses kafka-go defaults.
+	DialTimeout time.Duration
 }
 
 // Validate checks the configuration without touching the network.
@@ -92,7 +116,10 @@ func (c Config) Validate() error {
 	if c.Timeout < 0 {
 		return fmt.Errorf("timeout must not be negative, got %s", c.Timeout)
 	}
-	if c.SASL != nil && c.SASL.Mechanism != "" {
+	if c.DialTimeout < 0 {
+		return fmt.Errorf("dial timeout must not be negative, got %s", c.DialTimeout)
+	}
+	if c.SASL != nil {
 		if _, err := ParseSASLMechanism(c.SASL.Mechanism); err != nil {
 			return err
 		}

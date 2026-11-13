@@ -72,7 +72,7 @@ func TestNewTransport_SASL(t *testing.T) {
 		{name: "scram_sha512", sasl: &SASLConfig{Mechanism: "scram-sha512", Username: testUser, Password: testPassword}, wantName: "SCRAM-SHA-512"},
 		{name: "scram_sha_512", sasl: &SASLConfig{Mechanism: "scram-sha-512", Username: testUser, Password: testPassword}, wantName: "SCRAM-SHA-512"},
 		{name: "aws_msk_iam", sasl: &SASLConfig{Mechanism: "aws-msk-iam"}, wantName: "AWS_MSK_IAM"},
-		{name: "empty_mechanism_defaults_to_aws_msk_iam", sasl: &SASLConfig{}, wantName: "AWS_MSK_IAM"},
+		{name: "empty_mechanism_is_an_error", sasl: &SASLConfig{}, wantErr: true},
 		{name: "unknown_mechanism", sasl: &SASLConfig{Mechanism: "gssapi", Username: testUser, Password: testPassword}, wantErr: true},
 	}
 	for _, tc := range tests {
@@ -123,6 +123,17 @@ func TestNewTransport_AWSLoaderError(t *testing.T) {
 	require.ErrorIs(t, err, sentinel)
 }
 
+func TestNewTransport_AWSEmptyRegion(t *testing.T) {
+	loader := func(context.Context) (aws.Config, error) { return aws.Config{}, nil }
+
+	_, err := newTransport(t.Context(), Config{
+		BootstrapServer: "b:9092",
+		SASL:            &SASLConfig{Mechanism: "aws-msk-iam"},
+	}, loader)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AWS region is empty")
+}
+
 func TestNewTransport_TLS(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -152,10 +163,37 @@ func TestNewTransport_TLS(t *testing.T) {
 }
 
 func TestNewTransport_Timeout(t *testing.T) {
-	transport, err := newTransport(t.Context(), Config{BootstrapServer: "b:9092", Timeout: 7 * time.Second}, fakeAWSLoader)
+	transport, err := newTransport(t.Context(), Config{BootstrapServer: "b:9092", Timeout: 7 * time.Second, DialTimeout: 7 * time.Second}, fakeAWSLoader)
 	require.NoError(t, err)
 	assert.Equal(t, 7*time.Second, transport.DialTimeout)
 	assert.Equal(t, clientID, transport.ClientID)
+}
+
+func TestNewTransport_DialTimeout(t *testing.T) {
+	transport, err := newTransport(t.Context(), Config{
+		BootstrapServer: "b:9092",
+		Timeout:         300 * time.Second,
+		DialTimeout:     2 * time.Second,
+	}, fakeAWSLoader)
+	require.NoError(t, err)
+	assert.Equal(t, 2*time.Second, transport.DialTimeout, "the dial timeout does not follow the request timeout")
+}
+
+func TestDialTimeoutFor(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{name: "short_timeout_is_kept", timeout: 5 * time.Second, want: 5 * time.Second},
+		{name: "equal_to_limit", timeout: MaxDialTimeout, want: MaxDialTimeout},
+		{name: "long_timeout_is_limited", timeout: 300 * time.Second, want: MaxDialTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, DialTimeoutFor(tc.timeout))
+		})
+	}
 }
 
 func TestConfigValidate(t *testing.T) {
@@ -168,6 +206,8 @@ func TestConfigValidate(t *testing.T) {
 		{name: "missing_broker", cfg: Config{}, wantErr: true},
 		{name: "blank_broker", cfg: Config{BootstrapServer: "  "}, wantErr: true},
 		{name: "negative_timeout", cfg: Config{BootstrapServer: "b:9092", Timeout: -1}, wantErr: true},
+		{name: "negative_dial_timeout", cfg: Config{BootstrapServer: "b:9092", DialTimeout: -1}, wantErr: true},
+		{name: "empty_mechanism", cfg: Config{BootstrapServer: "b:9092", SASL: &SASLConfig{}}, wantErr: true},
 		{name: "bad_mechanism", cfg: Config{BootstrapServer: "b:9092", SASL: &SASLConfig{Mechanism: "nope", Password: testPassword}}, wantErr: true},
 	}
 	for _, tc := range tests {

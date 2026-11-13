@@ -1,3 +1,3 @@
 ```release-note:note
-provider: The build now uses Go 1.27.4. Go 1.25 is at its end of life and has no more security fixes. To build the provider from source, you now need Go 1.27 or later. This does not change the released files. This version also has fixes for known vulnerabilities, and the dependencies `golang.org/x/net` and `github.com/klauspost/compress` have new versions with fixes.
+provider: The build now uses Go 1.27.4. Go 1.25 is at its end of life and has no more security fixes. To build the provider from source, you now need Go 1.27 or later. This does not change the released files. This version also has fixes for known vulnerabilities, and the dependencies `golang.org/x/net` and `github.com/klauspost/compress` have new versions with fixes. (#190)
 ```

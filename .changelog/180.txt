@@ -3,5 +3,5 @@ resource/`kafka_topic`: The provider now chooses the brokers for new replicas an
     * Put each new replica in the rack that has the fewest replicas of that partition.
     * Then use the broker that has the fewest replicas.
     * To increase `replication_factor`, the provider only adds replicas. To decrease it, the provider keeps the leader.
-    * This changes which brokers hold the new replicas. It does not change if the result is correct.
+    * This changes which brokers hold the new replicas. It does not change if the result is correct. (#180, #181)
 ```

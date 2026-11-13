@@ -1,7 +1,7 @@
 ```release-note:note
-resource/`kafka_topic`: If you delete a topic outside Terraform, the provider now sees this after about two seconds. Before, it saw this at once. The provider checks eight times in a row before it removes the topic from state. This stops a slow broker from causing a wrong removal.
+resource/`kafka_topic`: If you delete a topic outside Terraform, the provider now sees this after about two seconds. Before, it saw this at once. The provider checks eight times in a row before it removes the topic from state. This stops a slow broker from causing a wrong removal. (#176)
 ```
 
 ```release-note:note
-resource/`kafka_topic`: When a topic fails to create, the error title is now `Client Error`. Before, it was `Client Response Error`. The message still has the topic name and the broker error.
+resource/`kafka_topic`: When a topic fails to create, the error title is now `Client Error`. Before, it was `Client Response Error`. The message still has the topic name and the broker error. (#176)
 ```

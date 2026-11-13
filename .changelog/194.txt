@@ -1,19 +1,19 @@
 ```release-note:enhancement
-resource/`kafka_topic`: A change to `configuration` now uses incremental alter. Kafka 2.3 or later is necessary. The provider sets the keys that you manage and deletes the keys that you removed. It does not change a setting that is not in `configuration`. If the broker is older, the error names Kafka 2.3.
+resource/`kafka_topic`: A change to `configuration` now uses incremental alter. Kafka 2.3 or later is necessary. The provider sets the keys that you manage and deletes the keys that you removed. It does not change a setting that is not in `configuration`. If the broker is older, the error names Kafka 2.3. (#194)
 ```
 
 ```release-note:bug
-resource/`kafka_topic`: A change to `configuration` no longer resets the settings that are not in `configuration`. Before, it returned them to the broker default, but the documentation said it did not.
+resource/`kafka_topic`: A change to `configuration` no longer resets the settings that are not in `configuration`. Before, it returned them to the broker default, but the documentation said it did not. (#194)
 ```
 
 ```release-note:bug
-resource/`kafka_topic`: When a change to `configuration`, `replication_factor` or `partitions` fails after an earlier part of the same change worked, the provider now saves the part that worked to state. Before, state kept the old values.
+resource/`kafka_topic`: When a change to `configuration`, `replication_factor` or `partitions` fails after an earlier part of the same change worked, the provider now saves the part that worked to state. Before, state kept the old values. (#194)
 ```
 
 ```release-note:bug
-resource/`kafka_topic`: When you change `replication_factor` and the replicas already show the new count, for example after a timed-out apply, apply now waits until Kafka finishes the reassignment. Before, it ended at once.
+resource/`kafka_topic`: When you change `replication_factor` and the replicas already show the new count, for example after a timed-out apply, apply now waits until Kafka finishes the reassignment. Before, it ended at once. (#194)
 ```
 
 ```release-note:bug
-resource/`kafka_topic`: A change to `partitions` or `replication_factor` right after the topic was created no longer fails with `topic not found`. The provider now reads the topic again for a short time first.
+resource/`kafka_topic`: A change to `partitions` or `replication_factor` right after the topic was created no longer fails with `topic not found`. The provider now reads the topic again for a short time first. (#194)
 ```

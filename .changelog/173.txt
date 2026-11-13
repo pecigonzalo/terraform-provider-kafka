@@ -1,7 +1,7 @@
 ```release-note:note
-provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers.
+provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers. (#173)
 ```
 
 ```release-note:note
-data source/`kafka_topic`: The data source uses the new client.
+data source/`kafka_topic`: The data source uses the new client. (#173)
 ```

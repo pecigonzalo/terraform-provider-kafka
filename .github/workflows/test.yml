@@ -50,7 +50,21 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.14.0
+          version: v2.15.0
+
+  # Run the unit tests with the race detector. Acceptance tests do not run here,
+  # because TF_ACC is not set.
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+      - run: go test -race -count=1 ./...
 
   goreleaser:
     name: GoReleaser configuration
@@ -61,6 +75,26 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           args: check
+
+  # Build all release files for all platforms. This finds cross-compile and
+  # archive problems before a release tag. The job needs no secrets and does
+  # not sign or publish.
+  goreleaser-snapshot:
+    name: GoReleaser snapshot build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # GoReleaser reads the tag history to make the version.
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: "go.mod"
+          cache: true
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+        with:
+          args: release --snapshot --clean --skip=sign
 
   generate:
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-name: Dependabot auto-approve
+name: Dependabot auto-approve and auto-merge
 on:
   pull_request_target:
     types:
@@ -25,13 +25,27 @@ jobs:
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
+      # A grouped pull request can hold many updates. Approve it only if every
+      # update is a patch update of a Go module. A person reviews all other
+      # updates, including GitHub Actions updates.
+      - name: Check that all updates are patch updates of Go modules
+        id: patch-only
+        env:
+          UPDATES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          if jq -e 'length > 0 and all(.[]; .packageEcosystem == "go_modules" and .updateType == "version-update:semver-patch")' <<< "$UPDATES" > /dev/null; then
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Approve a PR
+        if: steps.patch-only.outputs.eligible == 'true'
         run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{github.event.pull_request.html_url}}
           GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
-      - name: Enable auto-merge for Dependabot PRs
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
+      - name: Enable auto-merge for patch updates of Go modules
+        if: steps.patch-only.outputs.eligible == 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{github.event.pull_request.html_url}}

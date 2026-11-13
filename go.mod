@@ -1,6 +1,6 @@
 module github.com/pecigonzalo/terraform-provider-kafka
 
-go 1.25.8
+go 1.25.14
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.8
@@ -57,7 +57,7 @@ require (
 	github.com/hashicorp/cli v1.1.7 // indirect
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.40.1 // indirect
-	github.com/klauspost/compress v1.18.7 // indirect
+	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/moby/api v1.55.0 // indirect

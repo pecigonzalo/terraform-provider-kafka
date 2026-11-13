@@ -2,11 +2,13 @@ package provider
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/segmentio/topicctl/pkg/admin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
 
 func TestGenerateSASLConfig(t *testing.T) {
@@ -20,15 +22,16 @@ func TestGenerateSASLConfig(t *testing.T) {
 	t.Run("defaults to aws-msk-iam", func(t *testing.T) {
 		cfg, err := p.generateSASLConfig(null)
 		assert.NoError(t, err)
-		assert.Equal(t, admin.SASLMechanismAWSMSKIAM, cfg.Mechanism)
+		require.NotNil(t, cfg)
+		assert.Equal(t, string(kafkaclient.SASLMechanismAWSMSKIAM), cfg.Mechanism)
 	})
 
-	for name, want := range map[string]admin.SASLMechanism{
-		"plain":         admin.SASLMechanismPlain,
-		"scram-sha256":  admin.SASLMechanismScramSHA256,
-		"scram-sha-256": admin.SASLMechanismScramSHA256,
-		"scram-sha512":  admin.SASLMechanismScramSHA512,
-		"scram-sha-512": admin.SASLMechanismScramSHA512,
+	for name, want := range map[string]kafkaclient.SASLMechanism{
+		"plain":         kafkaclient.SASLMechanismPlain,
+		"scram-sha256":  kafkaclient.SASLMechanismScramSHA256,
+		"scram-sha-256": kafkaclient.SASLMechanismScramSHA256,
+		"scram-sha512":  kafkaclient.SASLMechanismScramSHA512,
+		"scram-sha-512": kafkaclient.SASLMechanismScramSHA512,
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := null
@@ -37,7 +40,7 @@ func TestGenerateSASLConfig(t *testing.T) {
 			m.Password = types.StringValue("pass")
 			cfg, err := p.generateSASLConfig(m)
 			assert.NoError(t, err)
-			assert.Equal(t, want, cfg.Mechanism)
+			assert.Equal(t, string(want), cfg.Mechanism)
 			assert.Equal(t, "user", cfg.Username)
 			assert.Equal(t, "pass", cfg.Password)
 		})
@@ -47,7 +50,28 @@ func TestGenerateSASLConfig(t *testing.T) {
 		m := null
 		m.Mechanism = types.StringValue("bogus")
 		_, err := p.generateSASLConfig(m)
-		assert.Error(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unable to detect SASL mechanism")
+	})
+
+	t.Run("aws-msk-iam carries no credentials", func(t *testing.T) {
+		t.Setenv("KAFKA_SASL_USERNAME", "envuser")
+		t.Setenv("KAFKA_SASL_PASSWORD", "envpass")
+		cfg, err := p.generateSASLConfig(null)
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Username)
+		assert.Empty(t, cfg.Password)
+	})
+
+	t.Run("every generated mechanism passes client validation", func(t *testing.T) {
+		for _, name := range []string{"plain", "scram-sha256", "scram-sha-512", "aws-msk-iam"} {
+			m := null
+			m.Mechanism = types.StringValue(name)
+			sasl, err := p.generateSASLConfig(m)
+			require.NoError(t, err, name)
+			cfg := kafkaclient.Config{BootstrapServer: "broker:9092", Timeout: time.Second, SASL: sasl}
+			assert.NoError(t, cfg.Validate(), name)
+		}
 	})
 
 	t.Run("env used when config unset", func(t *testing.T) {
@@ -56,7 +80,7 @@ func TestGenerateSASLConfig(t *testing.T) {
 		t.Setenv("KAFKA_SASL_PASSWORD", "envpass")
 		cfg, err := p.generateSASLConfig(null)
 		assert.NoError(t, err)
-		assert.Equal(t, admin.SASLMechanismPlain, cfg.Mechanism)
+		assert.Equal(t, string(kafkaclient.SASLMechanismPlain), cfg.Mechanism)
 		assert.Equal(t, "envuser", cfg.Username)
 		assert.Equal(t, "envpass", cfg.Password)
 	})

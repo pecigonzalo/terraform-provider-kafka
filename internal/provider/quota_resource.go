@@ -219,20 +219,20 @@ func (r *quotaResource) Configure(_ context.Context, req resource.ConfigureReque
 	if req.ProviderData == nil {
 		return
 	}
-	clients, ok := req.ProviderData.(*resourceClients)
+	client, ok := req.ProviderData.(*kafkaclient.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *provider.resourceClients, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *kafkaclient.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
-	if clients.kafka == nil {
+	if client == nil {
 		resp.Diagnostics.AddError("Missing Kafka client", "The provider did not supply a Kafka client. Please report this issue to the provider developers.")
 		return
 	}
-	r.client = clients.kafka
-	r.timeout = clients.kafka.Timeout()
+	r.client = client
+	r.timeout = client.Timeout()
 	r.interval = quotaPollInterval
 }
 

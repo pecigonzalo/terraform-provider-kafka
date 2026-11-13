@@ -49,7 +49,7 @@ func topicUnsettled(info kafkaclient.TopicInfo, state *TopicResourceModel) bool 
 	if !state.ReplicationFactor.IsNull() && !state.ReplicationFactor.IsUnknown() {
 		// Replicas differing between partitions means a reassignment is still
 		// in progress, which is also not settled.
-		factor, err := kafkaclientReplicaCount(info)
+		factor, err := replicaCount(info)
 		if err != nil || int64(factor) != state.ReplicationFactor.ValueInt64() {
 			return true
 		}

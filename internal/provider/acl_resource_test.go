@@ -178,10 +178,10 @@ func TestACLErrorDetail(t *testing.T) {
 }
 
 func TestACLResourceConfigure(t *testing.T) {
-	t.Run("accepts_resource_clients", func(t *testing.T) {
+	t.Run("accepts_client", func(t *testing.T) {
 		r := &aclResource{}
 		resp := &fwresource.ConfigureResponse{}
-		r.Configure(t.Context(), fwresource.ConfigureRequest{ProviderData: &resourceClients{kafka: &kafkaclient.Client{}}}, resp)
+		r.Configure(t.Context(), fwresource.ConfigureRequest{ProviderData: &kafkaclient.Client{}}, resp)
 		assert.False(t, resp.Diagnostics.HasError())
 		assert.NotNil(t, r.client)
 	})

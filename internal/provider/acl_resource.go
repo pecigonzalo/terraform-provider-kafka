@@ -167,17 +167,17 @@ func (r *aclResource) Configure(_ context.Context, req resource.ConfigureRequest
 	if req.ProviderData == nil {
 		return
 	}
-	clients, ok := req.ProviderData.(*resourceClients)
+	client, ok := req.ProviderData.(*kafkaclient.Client)
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
-			fmt.Sprintf("Expected *provider.resourceClients, got: %T. Please report this issue to the provider developers.", req.ProviderData),
+			fmt.Sprintf("Expected *kafkaclient.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
 		return
 	}
 	// A nil *Client must not become a non-nil interface.
-	if clients.kafka != nil {
-		r.client = clients.kafka
+	if client != nil {
+		r.client = client
 	}
 }
 

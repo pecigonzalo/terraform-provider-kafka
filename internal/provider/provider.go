@@ -17,7 +17,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
-	"github.com/segmentio/topicctl/pkg/admin"
 
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
@@ -160,7 +159,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 
-	var brokerConfig admin.BrokerAdminClientConfig
+	var clientConfig kafkaclient.Config
 
 	// Bootstrap servers
 	bootstrapServer, err := p.bootstrapServer(config.BootstrapServers)
@@ -168,7 +167,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		resp.Diagnostics.AddAttributeError(path.Root("bootstrap_servers"), "Missing Kafka bootstrap servers", err.Error())
 		return
 	}
-	brokerConfig.BrokerAddr = bootstrapServer
+	clientConfig.BootstrapServer = bootstrapServer
 
 	// SASL configuration
 	saslConfigEnabled, err := p.getEnvBool("SASL_ENABLED", true)
@@ -185,16 +184,16 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 			resp.Diagnostics.AddError("Unable to create Kafka client", err.Error())
 			return
 		}
-		brokerConfig.SASL = saslConfig
+		clientConfig.SASL = saslConfig
 	}
 
 	// Configure TLS settings
 	// TLS is enabled unless explicitly disabled, as documented in the schema
-	brokerConfig.TLS.Enabled = true
+	clientConfig.TLS.Enabled = true
 	if !config.TLS.Enabled.IsNull() {
-		brokerConfig.TLS.Enabled = config.TLS.Enabled.ValueBool()
+		clientConfig.TLS.Enabled = config.TLS.Enabled.ValueBool()
 	}
-	brokerConfig.TLS.SkipVerify = config.TLS.SkipVerify.ValueBool()
+	clientConfig.TLS.SkipVerify = config.TLS.SkipVerify.ValueBool()
 
 	// Configure timeout
 	envTimeout, err := p.getEnvInt("TIMEOUT", 300)
@@ -206,7 +205,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	if !config.Timeout.IsNull() {
 		defaultTimeout = config.Timeout.ValueInt64()
 	}
-	kafkaClientTimeout := time.Second * time.Duration(defaultTimeout)
+	clientConfig.Timeout = time.Second * time.Duration(defaultTimeout)
 
 	tflog.Debug(ctx, "Creating Kafka client")
 
@@ -219,7 +218,7 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 	// the client is never closed explicitly. It holds only idle broker
 	// connections and the transport's background metadata refresh, both of
 	// which end with the provider process that Terraform starts per run.
-	kafkaClient, err := kafkaclient.New(ctx, kafkaClientConfig(brokerConfig, kafkaClientTimeout))
+	kafkaClient, err := kafkaclient.New(ctx, clientConfig)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Kafka client",
 			"An unexpected error occurred when creating the Kafka client "+
@@ -227,58 +226,8 @@ func (p *kafkaProvider) Configure(ctx context.Context, req provider.ConfigureReq
 		return
 	}
 	resp.DataSourceData = kafkaClient.ReadOnly()
-
-	// The topic resource still needs topicctl to change the replication factor
-	// and to add partitions.
-	brokerConfig.ReadOnly = false
-	resourceClient, err := admin.NewBrokerAdminClient(
-		ctx,
-		brokerConfig,
-	)
-	if err != nil {
-		resp.Diagnostics.AddError("Unable to create Kafka client",
-			"An unexpected error occurred when creating the Kafka client "+
-				"Kafka Error: "+err.Error())
-		return
-	}
-	resourceClient.GetConnector().KafkaClient.Timeout = time.Duration(kafkaClientTimeout)
-	resp.ResourceData = &resourceClients{
-		kafka:    kafkaClient,
-		topicctl: resourceClient,
-	}
+	resp.ResourceData = kafkaClient
 	tflog.Info(ctx, "Configured Kafka client", map[string]any{"success": true})
-}
-
-// resourceClients is the provider data handed to resources. A single value
-// carries both clients because the framework passes resources one value.
-type resourceClients struct {
-	// kafka is the read-write kafkaclient client.
-	kafka *kafkaclient.Client
-	// topicctl is only used by the topic resource to change the replication
-	// factor and add partitions. It is removed once those use kafkaclient.
-	topicctl *admin.BrokerAdminClient
-}
-
-// kafkaClientConfig maps the resolved provider settings to a kafkaclient
-// configuration, so the precedence of configuration over environment variables
-// is decided in one place.
-func kafkaClientConfig(brokerConfig admin.BrokerAdminClientConfig, timeout time.Duration) kafkaclient.Config {
-	cfg := kafkaclient.Config{
-		BootstrapServer: brokerConfig.BrokerAddr,
-		TLS: kafkaclient.TLSConfig{
-			Enabled:    brokerConfig.TLS.Enabled,
-			SkipVerify: brokerConfig.TLS.SkipVerify,
-		},
-		Timeout: timeout,
-	}
-	if brokerConfig.SASL.Enabled {
-		cfg.SASL = &kafkaclient.SASLConfig{
-			Mechanism: string(brokerConfig.SASL.Mechanism),
-			Username:  brokerConfig.SASL.Username,
-			Password:  brokerConfig.SASL.Password,
-		}
-	}
-	return cfg
 }
 
 // bootstrapServer returns the broker address used to bootstrap the client.
@@ -298,9 +247,12 @@ func (p *kafkaProvider) bootstrapServer(configured []types.String) (string, erro
 	return "", fmt.Errorf("set bootstrap_servers or the %s_BOOTSTRAP_SERVERS environment variable", strings.ToUpper(p.typeName))
 }
 
-// generateSASLConfig returns a SASLConfig{} or an error given a SASLModel.
-// Values set in the configuration take precedence over environment variables.
-func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (admin.SASLConfig, error) {
+// generateSASLConfig returns the SASL settings for the client, or an error
+// given a SASLModel. Values set in the configuration take precedence over
+// environment variables. The mechanism is normalised, and the AWS MSK IAM
+// mechanism carries no username or password because it signs with AWS
+// credentials.
+func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (*kafkaclient.SASLConfig, error) {
 	mechanism := p.getEnv("SASL_MECHANISM", "aws-msk-iam")
 	if !sasl.Mechanism.IsNull() {
 		mechanism = sasl.Mechanism.ValueString()
@@ -316,27 +268,13 @@ func (p *kafkaProvider) generateSASLConfig(sasl SASLConfigModel) (admin.SASLConf
 
 	parsed, err := kafkaclient.ParseSASLMechanism(mechanism)
 	if err != nil {
-		return admin.SASLConfig{}, err
+		return nil, err
 	}
-
-	var saslMechanism admin.SASLMechanism
-	switch parsed {
-	case kafkaclient.SASLMechanismPlain:
-		saslMechanism = admin.SASLMechanismPlain
-	case kafkaclient.SASLMechanismScramSHA256:
-		saslMechanism = admin.SASLMechanismScramSHA256
-	case kafkaclient.SASLMechanismScramSHA512:
-		saslMechanism = admin.SASLMechanismScramSHA512
-	case kafkaclient.SASLMechanismAWSMSKIAM:
-		return admin.SASLConfig{
-			Enabled:   true,
-			Mechanism: admin.SASLMechanismAWSMSKIAM,
-		}, nil
+	if parsed == kafkaclient.SASLMechanismAWSMSKIAM {
+		return &kafkaclient.SASLConfig{Mechanism: string(parsed)}, nil
 	}
-
-	return admin.SASLConfig{
-		Enabled:   true,
-		Mechanism: saslMechanism,
+	return &kafkaclient.SASLConfig{
+		Mechanism: string(parsed),
 		Username:  username,
 		Password:  password,
 	}, nil

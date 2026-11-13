@@ -482,8 +482,13 @@ func aclSchema(t *testing.T, r *aclResource) fwresourceschema.Schema {
 // gives a warning and no error. A tainted resource would be replaced by the
 // next apply, although the ACL is correct.
 func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
-	createACL := func(t *testing.T, api *fakeACLAPI, ctx context.Context) *fwresource.CreateResponse {
+	createACL := func(t *testing.T, api *fakeACLAPI, cancelled bool) *fwresource.CreateResponse {
 		t.Helper()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		if cancelled {
+			cancel()
+		}
 		r := newTestACLResource(api)
 		sch := aclSchema(t, r)
 		plan := tfsdk.Plan{Schema: sch, Raw: aclModelObject(t, r, testACL())}
@@ -494,7 +499,7 @@ func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
 
 	t.Run("create_warns_when_the_wait_times_out", func(t *testing.T) {
 		api := &fakeACLAPI{hidden: true, timeout: 30 * time.Millisecond}
-		resp := createACL(t, api, t.Context())
+		resp := createACL(t, api, false)
 
 		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
 		require.Equal(t, 1, resp.Diagnostics.WarningsCount())
@@ -505,7 +510,7 @@ func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
 
 	t.Run("create_warns_when_describe_fails_after_the_write", func(t *testing.T) {
 		api := &fakeACLAPI{describeErr: errors.New("describe failed"), timeout: time.Second}
-		resp := createACL(t, api, t.Context())
+		resp := createACL(t, api, false)
 
 		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
 		require.Equal(t, 1, resp.Diagnostics.WarningsCount())
@@ -515,7 +520,7 @@ func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
 
 	t.Run("create_fails_when_the_write_fails", func(t *testing.T) {
 		api := &fakeACLAPI{createErr: errors.New("write refused"), timeout: time.Second}
-		resp := createACL(t, api, t.Context())
+		resp := createACL(t, api, false)
 
 		require.True(t, resp.Diagnostics.HasError())
 		assert.True(t, resp.State.Raw.IsNull(), "no state is saved when the write fails")
@@ -523,7 +528,7 @@ func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
 
 	t.Run("create_succeeds_when_visible", func(t *testing.T) {
 		api := &fakeACLAPI{lag: 3, timeout: 2 * time.Second}
-		resp := createACL(t, api, t.Context())
+		resp := createACL(t, api, false)
 
 		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
 		assert.Equal(t, 0, resp.Diagnostics.WarningsCount())
@@ -532,9 +537,7 @@ func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
 
 	t.Run("create_with_cancelled_context_warns_and_saves_state", func(t *testing.T) {
 		api := &fakeACLAPI{hidden: true, timeout: time.Minute}
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		resp := createACL(t, api, ctx)
+		resp := createACL(t, api, true)
 
 		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
 		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())

@@ -211,7 +211,7 @@ func testAccBrokerAddresses(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	metadata, err := client.Metadata(ctx)
 	if err != nil {
 		return nil, err

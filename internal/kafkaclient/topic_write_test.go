@@ -88,11 +88,10 @@ func TestClientCreateTopic(t *testing.T) {
 			wantMsg: `create topic "orders"`,
 		},
 		{
-			name: "invalid_replication_factor",
-			rt: &topicWriteRoundTripper{create: &createtopics.Response{Topics: []createtopics.ResponseTopic{
-				{Name: "orders", ErrorCode: code(kafka.InvalidReplicationFactor)},
-			}}},
-			wantErr: kafka.InvalidReplicationFactor,
+			name:    "no_result_for_the_topic",
+			rt:      &topicWriteRoundTripper{create: &createtopics.Response{}},
+			wantErr: errNoResult,
+			wantMsg: `create topic "orders"`,
 		},
 	}
 	for _, tc := range tests {
@@ -180,6 +179,13 @@ func TestClientDeleteTopics(t *testing.T) {
 			wantIs:  kafka.TopicAuthorizationFailed,
 		},
 		{
+			name:    "no_result_for_a_topic",
+			rt:      &topicWriteRoundTripper{delete: &deletetopics.Response{Responses: []deletetopics.ResponseTopic{{Name: "a"}}}},
+			names:   []string{"a", "b"},
+			wantErr: true,
+			wantIs:  errNoResult,
+		},
+		{
 			name: "several_topics_report_each_failure",
 			rt: &topicWriteRoundTripper{delete: &deletetopics.Response{Responses: []deletetopics.ResponseTopic{
 				{Name: "a"},
@@ -210,7 +216,7 @@ func TestClientDeleteTopics(t *testing.T) {
 }
 
 func TestClientDeleteTopics_SendsNames(t *testing.T) {
-	rt := &topicWriteRoundTripper{delete: &deletetopics.Response{}}
+	rt := &topicWriteRoundTripper{delete: &deletetopics.Response{Responses: []deletetopics.ResponseTopic{{Name: "a"}, {Name: "b"}}}}
 	c := newTopicWriteClient(t, rt)
 
 	require.NoError(t, c.DeleteTopics(t.Context(), "a", "b"))
@@ -246,6 +252,11 @@ func TestClientAlterTopicConfig(t *testing.T) {
 				{ResourceType: topicType, ResourceName: "orders", ErrorCode: code(kafka.InvalidConfiguration), ErrorMessage: "bad value"},
 			}}},
 			wantIs: kafka.InvalidConfiguration,
+		},
+		{
+			name:   "no_result_for_the_topic",
+			rt:     &topicWriteRoundTripper{incremental: &incrementalalterconfigs.Response{}},
+			wantIs: errNoResult,
 		},
 		{
 			name: "missing_topic_is_not_found",
@@ -292,7 +303,7 @@ func TestClientAlterTopicConfig(t *testing.T) {
 }
 
 func TestClientAlterTopicConfig_Request(t *testing.T) {
-	rt := &topicWriteRoundTripper{incremental: &incrementalalterconfigs.Response{}}
+	rt := &topicWriteRoundTripper{incremental: &incrementalalterconfigs.Response{Responses: []incrementalalterconfigs.ResponseAlterResponse{{ResourceType: int8(kafka.ResourceTypeTopic), ResourceName: "orders"}}}}
 	c := newTopicWriteClient(t, rt)
 
 	previous := map[string]string{"gone": "1", "kept": "old", "also.gone": "x"}
@@ -313,7 +324,7 @@ func TestClientAlterTopicConfig_Request(t *testing.T) {
 }
 
 func TestClientAlterTopicConfig_RemovingEveryKeyOnlyDeletes(t *testing.T) {
-	rt := &topicWriteRoundTripper{incremental: &incrementalalterconfigs.Response{}}
+	rt := &topicWriteRoundTripper{incremental: &incrementalalterconfigs.Response{Responses: []incrementalalterconfigs.ResponseAlterResponse{{ResourceType: int8(kafka.ResourceTypeTopic), ResourceName: "orders"}}}}
 	c := newTopicWriteClient(t, rt)
 
 	require.NoError(t, c.AlterTopicConfig(t.Context(), "orders", map[string]string{"a": "1"}, nil))
@@ -332,46 +343,4 @@ func TestClientAlterTopicConfig_NoChangeSendsNothing(t *testing.T) {
 
 	assert.Empty(t, rt.incrementals)
 	assert.Empty(t, rt.alters, "the full-replace API is never used")
-}
-
-func TestJoinResponseErrors(t *testing.T) {
-	errBoom := errors.New("boom")
-	errOther := errors.New("other")
-
-	tests := []struct {
-		name string
-		errs map[string]error
-		// want is the expected error message; empty means no error.
-		want string
-	}{
-		{name: "empty_map_returns_nil", errs: map[string]error{}},
-		{name: "all_nil_returns_nil", errs: map[string]error{"orders": nil, "users": nil}},
-		{name: "one_error", errs: map[string]error{"orders": errBoom}, want: `act "orders": boom`},
-		{
-			name: "several_errors_sorted_by_name",
-			errs: map[string]error{"zeta": errOther, "alpha": errBoom},
-			want: "act \"alpha\": boom\nact \"zeta\": other",
-		},
-		{name: "nil_entry_is_skipped", errs: map[string]error{"a": nil, "b": errBoom}, want: `act "b": boom`},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := joinResponseErrors(tc.errs, "act", nil)
-
-			if tc.want == "" {
-				require.NoError(t, got)
-				return
-			}
-			require.Error(t, got)
-			assert.Equal(t, tc.want, got.Error())
-		})
-	}
-}
-
-func TestJoinResponseErrors_KeepsWrappedCause(t *testing.T) {
-	errBoom := errors.New("boom")
-
-	got := joinResponseErrors(map[string]error{"orders": errBoom}, "act", nil)
-
-	assert.ErrorIs(t, got, errBoom)
 }

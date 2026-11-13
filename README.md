@@ -198,6 +198,8 @@ To check the files, run `make changelog-check`. It checks that the file name has
 3. Create the release on the releases page. Make a new tag `vx.y.z` on `main`. You do not need to write notes.
 4. The release workflow runs when the tag is pushed. It builds the notes with `make changelog-notes` and gives them to GoReleaser. GoReleaser replaces the text of the release with these notes.
 
+The build fails if there is no new entry since the last release, so the release stops before it publishes anything. Add an entry (for example a `note`) for a release that has no user-visible change.
+
 If an entry is wrong, correct the entry file in a PR. Then delete the tag and the release, and create them again.
 
 The build finds the new entries by comparing the files in `.changelog/` at the last release tag with the files at the new tag. For this reason you do not need to delete old entry files, and the folder grows by one small file for each PR. You can delete old files, because the previous tag still has them. This is not necessary. If the last tag was made before `.changelog/` existed, the build uses all entries.

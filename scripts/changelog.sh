@@ -21,7 +21,8 @@ readonly NOTE_TYPES="breaking-change upgrade-note new-resource new-data-source f
 last_tag() {
   local at_head
   at_head="$(git tag --points-at HEAD)"
-  git tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
+  # versionsort.suffix makes a pre-release tag such as v1.0.0-rc1 sort before v1.0.0.
+  git -c versionsort.suffix=- tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
     grep -vxF -e "${at_head:-/no-tag/}" | head -n 1 || true
 }
 

@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+# Run from the root of the repository, so that the paths below are correct from any directory.
+cd "$(git rev-parse --show-toplevel)"
+
 readonly ENTRIES_DIR=".changelog"
 readonly TEMPLATES_DIR=".changelog-templates"
 readonly NOTE_TYPES="breaking-change upgrade-note new-resource new-data-source feature enhancement bug note"

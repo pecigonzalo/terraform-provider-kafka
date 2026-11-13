@@ -124,7 +124,7 @@ own containers on free ports, so runs can execute in parallel.
 
 ## Changelog entries
 
-Each pull request that changes what users see adds one file to the directory `.changelog/`. The file name is the number of the pull request, for example `.changelog/154.txt`. A change that only affects the code, the tests or the build needs no file.
+Each pull request that changes what users see adds one file to the directory `.changelog/`. Name the file with the number of your pull request, for example `.changelog/154.txt`. Use only one number. A change that only affects the code, the tests or the build needs no file.
 
 The file has one block for each entry. A block has this form:
 
@@ -185,7 +185,9 @@ provider: The build now uses a newer Go version.
 ```
 ````
 
-One file can have more than one block. If one entry belongs to more than one pull request, put the numbers in the file name: `.changelog/154, #158.txt`. The build then prints `(#154, #158)`. Use quotes around this name in a shell.
+One file can have more than one block.
+
+Some old entries belong to more than one pull request. Their file names have all the numbers, for example `.changelog/154, #158.txt`, and the build prints `(#154, #158)`. These names have spaces and `#`, so put quotes around them in a shell. A new entry does not need this form.
 
 To check the format of all files, run `make changelog-check`. To see the entries that are not in a release yet, commit them and run `make changelog-preview`.
 

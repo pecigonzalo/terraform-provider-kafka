@@ -3,6 +3,7 @@ package kafkaclient
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"time"
 
@@ -50,7 +51,7 @@ func newTransport(ctx context.Context, cfg Config, loadAWS awsConfigLoader) (*ka
 
 	transport := &kafka.Transport{
 		ClientID:    clientID,
-		DialTimeout: cfg.Timeout,
+		DialTimeout: cfg.DialTimeout,
 		MetadataTTL: metadataTTL,
 	}
 
@@ -73,11 +74,7 @@ func newTransport(ctx context.Context, cfg Config, loadAWS awsConfigLoader) (*ka
 }
 
 func newSASLMechanism(ctx context.Context, cfg SASLConfig, loadAWS awsConfigLoader) (sasl.Mechanism, error) {
-	name := cfg.Mechanism
-	if name == "" {
-		name = string(DefaultSASLMechanism)
-	}
-	mechanism, err := ParseSASLMechanism(name)
+	mechanism, err := ParseSASLMechanism(cfg.Mechanism)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +90,9 @@ func newSASLMechanism(ctx context.Context, cfg SASLConfig, loadAWS awsConfigLoad
 		awsCfg, err := loadAWS(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("load aws configuration for %s: %w", mechanism, err)
+		}
+		if awsCfg.Region == "" {
+			return nil, errors.New("the AWS region is empty: set AWS_REGION or AWS_DEFAULT_REGION, or set a region in the AWS configuration file")
 		}
 		return &aws_msk_iam_v2.Mechanism{
 			Signer:      sigv4.NewSigner(),

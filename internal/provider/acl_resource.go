@@ -396,17 +396,36 @@ func addACLError(diags *diag.Diagnostics, summary string, err error) {
 	diags.AddError(summary, aclErrorDetail(err))
 }
 
-// aclErrorDetail maps the kafkaclient sentinel errors to actionable advice and
-// keeps the underlying error text.
+// aclAccess says what a caller does with ACLs, which decides the advice given
+// when the broker refuses it.
+type aclAccess struct {
+	subject   string // resource or data source name, for example "kafka_acl"
+	verb      string // "manage" or "read"
+	passive   string // "managed" or "read"
+	operation string // cluster operation the principal needs
+}
+
+var (
+	aclManageAccess = aclAccess{subject: "kafka_acl", verb: "manage", passive: "managed", operation: "Alter"}
+	aclReadAccess   = aclAccess{subject: "kafka_acls", verb: "read", passive: "read", operation: "Describe"}
+)
+
+// aclErrorDetail maps the kafkaclient sentinel errors to actionable advice for
+// the kafka_acl resource and keeps the underlying error text.
 func aclErrorDetail(err error) string {
+	return aclErrorDetailFor(aclManageAccess, err)
+}
+
+// aclErrorDetailFor is aclErrorDetail for the given kind of access.
+func aclErrorDetailFor(access aclAccess, err error) string {
 	switch {
 	case errors.Is(err, kafkaclient.ErrSecurityDisabled):
-		return "The broker has no authorizer configured, so ACLs cannot be managed. " +
-			"Enable one (for example `authorizer.class.name` on the brokers) before using kafka_acl.\n\n" +
+		return "The broker has no authorizer configured, so ACLs cannot be " + access.passive + ". " +
+			"Enable one (for example `authorizer.class.name` on the brokers) before using " + access.subject + ".\n\n" +
 			"Error: " + err.Error()
 	case errors.Is(err, kafkaclient.ErrNotAuthorized):
-		return "The provider's principal is not authorized to manage ACLs. " +
-			"Grant it the Alter operation on the cluster resource.\n\n" +
+		return "The provider's principal is not authorized to " + access.verb + " ACLs. " +
+			"Grant it the " + access.operation + " operation on the cluster resource.\n\n" +
 			"Error: " + err.Error()
 	case errors.Is(err, kafkaclient.ErrInvalidACL):
 		return "The ACL is not valid: " + err.Error()

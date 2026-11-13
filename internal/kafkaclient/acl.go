@@ -363,6 +363,51 @@ func (f ACLFilter) Validate() error {
 	return err
 }
 
+// CheckConsistency reports filters whose fields cannot all match the same
+// ACL, because no ACL Kafka accepts has that combination. Such a filter is
+// valid on the wire and simply matches nothing, so this is for catching
+// mistakes early. It runs [ACLFilter.Validate] first and returns an error
+// wrapping [ErrInvalidACL]. Rules, applied to the fields that are set:
+//
+//   - the cluster resource type requires resource name [ClusterResourceName]
+//     and not a prefixed pattern;
+//   - a prefixed pattern cannot be combined with the wildcard name "*";
+//   - the operation must be supported by the resource type.
+func (f ACLFilter) CheckConsistency() error {
+	if err := f.Validate(); err != nil {
+		return err
+	}
+	// Validate guarantees these parse.
+	rt, _ := ParseACLResourceTypeFilter(orAnyString(string(f.ResourceType)))
+	pt, _ := ParseACLPatternTypeFilter(orAnyString(string(f.PatternType)))
+	op, _ := ParseACLOperationFilter(orAnyString(string(f.Operation)))
+
+	if rt == ACLResourceTypeCluster {
+		if f.ResourceName != "" && f.ResourceName != ClusterResourceName {
+			return fmt.Errorf("%w: resource name for resource type cluster must be %q, got %q",
+				ErrInvalidACL, ClusterResourceName, f.ResourceName)
+		}
+		if pt == ACLPatternTypePrefixed {
+			return fmt.Errorf("%w: resource type cluster has no prefixed ACLs, its pattern type is literal", ErrInvalidACL)
+		}
+	}
+	if pt == ACLPatternTypePrefixed && f.ResourceName == "*" {
+		return fmt.Errorf("%w: pattern type prefixed cannot be combined with the wildcard resource name %q; use literal", ErrInvalidACL, "*")
+	}
+	if rt != ACLResourceTypeAny && op != ACLOperationAny && !slices.Contains(validOperations[rt], op) {
+		return fmt.Errorf("%w: operation %q is not valid for resource type %q, valid operations are: %s",
+			ErrInvalidACL, op, rt, joinStrings(validOperations[rt]))
+	}
+	return nil
+}
+
+func orAnyString(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "any"
+	}
+	return s
+}
+
 // toKafka converts the filter to kafka-go's wire form, validating it.
 func (f ACLFilter) toKafka() (kafka.ACLFilter, error) {
 	orAny := func(s, any string) string {

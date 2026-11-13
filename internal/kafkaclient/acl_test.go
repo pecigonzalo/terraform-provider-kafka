@@ -464,3 +464,38 @@ func TestDeleteACLs(t *testing.T) {
 		}
 	})
 }
+
+func TestACLFilterCheckConsistency(t *testing.T) {
+	tests := []struct {
+		name    string
+		filter  ACLFilter
+		wantErr string // empty means valid
+	}{
+		{"empty", ACLFilter{}, ""},
+		{"topic_read", ACLFilter{ResourceType: ACLResourceTypeTopic, Operation: ACLOperationRead}, ""},
+		{"any_resource_type_any_operation", ACLFilter{ResourceType: ACLResourceTypeAny, Operation: ACLOperationIdempotentWrite}, ""},
+		{"operation_without_resource_type", ACLFilter{Operation: ACLOperationClusterAction}, ""},
+		{"cluster_default_name", ACLFilter{ResourceType: ACLResourceTypeCluster, ResourceName: ClusterResourceName}, ""},
+		{"cluster_match_pattern", ACLFilter{ResourceType: ACLResourceTypeCluster, PatternType: ACLPatternTypeMatch}, ""},
+		{"prefixed_topic", ACLFilter{ResourceType: ACLResourceTypeTopic, ResourceName: "app.", PatternType: ACLPatternTypePrefixed}, ""},
+		{"cluster_other_name", ACLFilter{ResourceType: ACLResourceTypeCluster, ResourceName: "x"}, "must be"},
+		{"cluster_prefixed", ACLFilter{ResourceType: ACLResourceTypeCluster, PatternType: ACLPatternTypePrefixed}, "no prefixed ACLs"},
+		{"prefixed_wildcard", ACLFilter{ResourceName: "*", PatternType: ACLPatternTypePrefixed}, "wildcard"},
+		{"group_write", ACLFilter{ResourceType: ACLResourceTypeGroup, Operation: ACLOperationWrite}, "not valid for resource type"},
+		{"topic_cluster_action", ACLFilter{ResourceType: ACLResourceTypeTopic, Operation: ACLOperationClusterAction}, "not valid for resource type"},
+		{"bad_principal", ACLFilter{Principal: "alice"}, "Type:name"},
+		{"bad_host", ACLFilter{Host: "10.*"}, "wildcard"},
+		{"unknown_enum", ACLFilter{Operation: "poke"}, "unknown operation"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.filter.CheckConsistency()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, ErrInvalidACL)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}

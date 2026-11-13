@@ -503,7 +503,7 @@ data "kafka_acls" "nothing" {
 					resource.TestCheckResourceAttr("data.kafka_acls.by_resource", "acls.0.host", "*"),
 					resource.TestCheckResourceAttr("data.kafka_acls.by_resource", "acls.0.resource_pattern_type", "literal"),
 					resource.TestCheckResourceAttr("data.kafka_acls.by_resource", "id",
-						fmt.Sprintf("acls|topic|%s||||||", topic)),
+						fmt.Sprintf("acls|topic|%s|||||", topic)),
 					// By principal.
 					testAccACLsCheckIDs("data.kafka_acls.by_principal", false, readID, writeID),
 					// By operation.

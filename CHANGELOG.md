@@ -1,6 +1,8 @@
 # Changelog
 
-The entries for the next release are in the directory `.changelog/`, one file for each pull request. To see them, run `make changelog-preview`. To add an entry, read "Changelog entries" in `README.md`.
+The release notes for 1.0.0 and later versions are in [GitHub Releases](https://github.com/pecigonzalo/terraform-provider-kafka/releases). The release workflow builds them from the files in `.changelog/`. To add an entry, read "Changelog entries" in `README.md`.
+
+The text below is the changelog of the earlier versions.
 
 ## 0.5.3 (2026-07-15)
 

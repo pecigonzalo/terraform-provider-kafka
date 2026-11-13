@@ -226,6 +226,7 @@ type fakeACLAPI struct {
 	deleted     []kafkaclient.ACLFilter
 	timeout     time.Duration
 	hidden      bool // created ACLs never become visible, deleted ones never go
+	hang        bool // describe waits until its context ends
 }
 
 func (f *fakeACLAPI) Timeout() time.Duration { return f.timeout }
@@ -243,10 +244,14 @@ func (f *fakeACLAPI) CreateACL(_ context.Context, acl kafkaclient.ACL) error {
 	return nil
 }
 
-func (f *fakeACLAPI) DescribeACLs(_ context.Context, filter kafkaclient.ACLFilter) ([]kafkaclient.ACL, error) {
+func (f *fakeACLAPI) DescribeACLs(ctx context.Context, filter kafkaclient.ACLFilter) ([]kafkaclient.ACL, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.describes++
+	if f.hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if f.describeErr != nil {
 		return nil, f.describeErr
 	}
@@ -338,6 +343,90 @@ func TestWaitForACL(t *testing.T) {
 		err := newTestACLResource(&fakeACLAPI{}).waitForACL(ctx, testACL(), true, time.Second)
 		require.ErrorIs(t, err, context.Canceled)
 		assert.NotErrorIs(t, err, errACLNotSettled)
+	})
+}
+
+func TestReadACL(t *testing.T) {
+	t.Run("present", func(t *testing.T) {
+		api := &fakeACLAPI{acls: []kafkaclient.ACL{testACL()}}
+		require.NoError(t, newTestACLResource(api).readACL(t.Context(), testACL()))
+	})
+
+	t.Run("absent_a_few_times_then_present_is_kept", func(t *testing.T) {
+		api := &fakeACLAPI{lag: minAbsentChecks - 1}
+		require.NoError(t, api.CreateACL(t.Context(), testACL()))
+		r := newTestACLResource(api)
+		r.readWindow = 5 * time.Second
+		require.NoError(t, r.readACL(t.Context(), testACL()))
+		assert.Equal(t, minAbsentChecks, api.describes)
+	})
+
+	t.Run("absent_every_time_is_gone_after_the_required_checks", func(t *testing.T) {
+		api := &fakeACLAPI{}
+		r := newTestACLResource(api)
+		r.readWindow = 5 * time.Second
+		err := r.readACL(t.Context(), testACL())
+		require.ErrorIs(t, err, errACLGone)
+		assert.Equal(t, minAbsentChecks, api.describes)
+	})
+
+	t.Run("window_ends_before_enough_checks_keeps_the_acl", func(t *testing.T) {
+		r := newTestACLResource(&fakeACLAPI{})
+		r.settleInterval = 10 * time.Millisecond
+		r.readWindow = 15 * time.Millisecond
+		err := r.readACL(t.Context(), testACL())
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, errACLGone)
+	})
+
+	t.Run("a_describe_that_never_finishes_keeps_the_acl", func(t *testing.T) {
+		api := &fakeACLAPI{hang: true}
+		r := newTestACLResource(api)
+		err := r.readACL(t.Context(), testACL())
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, errACLGone)
+	})
+
+	t.Run("describe_error_is_returned", func(t *testing.T) {
+		api := &fakeACLAPI{describeErr: fmt.Errorf("describe ACLs: %w", kafkaclient.ErrNotAuthorized)}
+		err := newTestACLResource(api).readACL(t.Context(), testACL())
+		assert.ErrorIs(t, err, kafkaclient.ErrNotAuthorized)
+	})
+}
+
+func TestACLReadResourceStates(t *testing.T) {
+	read := func(t *testing.T, api *fakeACLAPI) *fwresource.ReadResponse {
+		t.Helper()
+		r := newTestACLResource(api)
+		r.readWindow = 5 * time.Second
+		sch := aclSchema(t, r)
+		state := tfsdk.State{Schema: sch, Raw: aclModelObject(t, r, testACL())}
+		resp := &fwresource.ReadResponse{State: state}
+		r.Read(t.Context(), fwresource.ReadRequest{State: state}, resp)
+		return resp
+	}
+
+	t.Run("present_keeps_the_resource", func(t *testing.T) {
+		resp := read(t, &fakeACLAPI{acls: []kafkaclient.ACL{testACL()}})
+		require.False(t, resp.Diagnostics.HasError())
+		assert.False(t, resp.State.Raw.IsNull())
+	})
+
+	t.Run("absent_every_time_removes_the_resource", func(t *testing.T) {
+		resp := read(t, &fakeACLAPI{})
+		require.False(t, resp.Diagnostics.HasError())
+		assert.True(t, resp.State.Raw.IsNull())
+	})
+
+	t.Run("a_describe_that_never_finishes_keeps_the_resource", func(t *testing.T) {
+		api := &fakeACLAPI{hang: true}
+		r := newTestACLResource(api)
+		sch := aclSchema(t, r)
+		state := tfsdk.State{Schema: sch, Raw: aclModelObject(t, r, testACL())}
+		resp := &fwresource.ReadResponse{State: state}
+		r.Read(t.Context(), fwresource.ReadRequest{State: state}, resp)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.False(t, resp.State.Raw.IsNull(), "the resource stays in state")
 	})
 }
 

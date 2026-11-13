@@ -11,6 +11,7 @@ BREAKING CHANGES:
 * provider: `bootstrap_servers` is now optional. If you do not set it, the provider uses `KAFKA_BOOTSTRAP_SERVERS`. This variable holds a comma-separated list. The default `localhost:9092` is removed. If you set neither, the provider gives an error. Set one of them. (#152)
 * provider: A bad value in `KAFKA_SASL_ENABLED` or `KAFKA_TIMEOUT` now gives an error. In v0.5.3, the provider ignored it. Correct the value. (#156)
 * provider: `timeout` must be 1 or more. In v0.5.3, the provider did not check it. If you set `timeout` to 0, use a larger value. (#154)
+* data source/`kafka_topic`: The attribute `version` is removed. It was always `0`. If your configuration reads `data.kafka_topic.<name>.version`, remove that reference. Plan gives an error if you keep it. (#191)
 * resource/`kafka_topic`: `partitions` and `replication_factor` must be 1 or more. `name` must have 1 to 249 characters. It can have only letters, digits, `.`, `_` and `-`. It cannot be `.` or `..`. Plan gives an error if a value is not valid. Correct the value. (#154, #158)
 * resource/`kafka_topic`: Plan now gives an error if you decrease `partitions`. Plan also gives an error if `replication_factor` is more than the number of brokers. In v0.5.3, these errors came during apply. (#159)
 * resource/`kafka_topic`: `configuration` is now optional only. The provider now tracks only the keys that you set. In v0.5.3, `configuration` was also computed, and state held all broker settings. Read the upgrade note below before you apply. (#154)
@@ -55,6 +56,8 @@ NOTES:
 * provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers. (#173)
 * data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
 * provider: The build now uses Go 1.27.4. Go 1.25 is at its end of life and has no more security fixes. To build the provider from source, you now need Go 1.27 or later. This does not change the released files. This version also has fixes for known vulnerabilities, and the dependencies `golang.org/x/net` and `github.com/klauspost/compress` have new versions with fixes. (#190)
+* data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
+* data source/`kafka_topic`: The data source uses the new client. (#173)
 * The project now has a `LICENSE` file with the MIT license. Before this, the repository had no license file. (#192)
 
 ## 0.5.3 (2026-07-15)

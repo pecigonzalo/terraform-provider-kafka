@@ -34,6 +34,11 @@ const (
 	// timeout configured.
 	quotaDefaultTimeout = 5 * time.Minute
 
+	// quotaReadWindow bounds how long Read keeps describing a quota that does
+	// not match state or is missing. It must be long enough for minAbsentChecks
+	// describes, with the time each describe takes.
+	quotaReadWindow = 10 * time.Second
+
 	// minQuotaBrokerVersion is the first Kafka release with the quota APIs.
 	minQuotaBrokerVersion = "2.6"
 )
@@ -269,13 +274,18 @@ func (r *quotaResource) Create(ctx context.Context, req resource.CreateRequest, 
 		addQuotaError(&resp.Diagnostics, "Unable to create quota", err)
 		return
 	}
-	if err := r.settle(ctx, entity, quotaExpectation{present: limits}); err != nil {
-		addQuotaError(&resp.Diagnostics, "Quota did not become visible", err)
-		return
-	}
 
+	// Save state before waiting: the quota exists now, so if the wait fails
+	// Terraform must still know about it. Without this, the next apply would
+	// fail with "Quota already exists".
 	data.ID = types.StringValue(id)
 	resp.Diagnostics.Append(resp.State.Set(ctx, data)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if err := r.settle(ctx, entity, quotaExpectation{present: limits}); err != nil {
+		addQuotaSettleDiagnostic(&resp.Diagnostics, "Quota created but not visible yet", err)
+	}
 }
 
 func (r *quotaResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -298,8 +308,9 @@ func (r *quotaResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	tracked := data.managedLimits()
 
 	// Right after a write another broker can still answer from older state, so
-	// Read retries for a short while before treating a difference as drift.
-	entry, err := r.observe(ctx, entity, quotaExpectation{present: tracked}, readSettleWindow)
+	// Read retries for a short while before treating a difference as drift or
+	// the quota as gone.
+	entry, err := r.observe(ctx, entity, quotaExpectation{present: tracked}, quotaReadWindow)
 	if err != nil {
 		addQuotaError(&resp.Diagnostics, "Unable to read quota", err)
 		return
@@ -355,13 +366,18 @@ func (r *quotaResource) Update(ctx context.Context, req resource.UpdateRequest, 
 	for _, k := range remove {
 		exp.absent = append(exp.absent, kafkaclient.QuotaKey(k))
 	}
-	if err := r.settle(ctx, entity, exp); err != nil {
-		addQuotaError(&resp.Diagnostics, "Quota change did not become visible", err)
-		return
-	}
 
+	// The broker accepted the change, so save the planned values before
+	// waiting. If the wait fails, state still holds the values the broker
+	// accepted, and the next refresh shows what the broker reports.
 	plan.ID = state.ID
 	resp.Diagnostics.Append(resp.State.Set(ctx, plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if err := r.settle(ctx, entity, exp); err != nil {
+		addQuotaSettleDiagnostic(&resp.Diagnostics, "Quota change not visible yet", err)
+	}
 }
 
 func (r *quotaResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -465,15 +481,48 @@ func (r *quotaResource) settle(ctx context.Context, entity kafkaclient.QuotaEnti
 	return err
 }
 
-// observe is like settle but returns the last observed quota and treats
-// running out of time as success, because a difference that survives the
-// window is real drift to report rather than a failure.
+// observe reads the quota for Read. It returns nil, with no error, only when
+// the quota is confirmed gone: minAbsentChecks consecutive describes in the
+// window found no quota. A difference that survives the window is real drift,
+// so the last observation is returned for it.
+//
+// If the window ends before any describe finished, or before enough absent
+// answers, the error does not say the quota is gone, so Read keeps the
+// resource in state. A slow broker must not look like a deleted quota.
 func (r *quotaResource) observe(ctx context.Context, entity kafkaclient.QuotaEntity, exp quotaExpectation, window time.Duration) (*kafkaclient.QuotaEntry, error) {
-	entry, err := observeQuota(ctx, r.client, entity, exp, r.interval, window)
-	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+	waitCtx, cancel := context.WithTimeout(ctx, window)
+	defer cancel()
+
+	var (
+		last   *kafkaclient.QuotaEntry // latest quota that was found
+		absent int                     // consecutive describes without the quota
+	)
+	err := pollUntil(waitCtx, r.interval, func(ctx context.Context) (bool, error) {
+		entry, err := describeQuota(ctx, r.client, entity)
+		if err != nil {
+			return false, err
+		}
+		if entry == nil {
+			absent++
+			return absent >= minAbsentChecks, nil
+		}
+		absent = 0
+		last = entry
+		return exp.met(entry), nil
+	})
+	windowEnded := errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil
+	if err != nil && !windowEnded {
 		return nil, err
 	}
-	return entry, nil
+	switch {
+	case absent >= minAbsentChecks:
+		return nil, nil
+	case absent > 0:
+		return nil, fmt.Errorf("quota not found, but the read window ended after %d check(s), so it is not treated as deleted", absent)
+	case last == nil:
+		return nil, fmt.Errorf("no answer from the broker within %s, so the quota is kept in state", window)
+	}
+	return last, nil
 }
 
 // observeQuota describes the quota until exp is met or timeout passes. It
@@ -507,6 +556,18 @@ func quotaErrorMessage(err error) string {
 			"Grant it DESCRIBE_CONFIGS and ALTER_CONFIGS on the cluster resource. Details: " + err.Error()
 	}
 	return err.Error()
+}
+
+// addQuotaSettleDiagnostic reports a failed wait after the broker accepted a
+// change. A wait that ran out of time is a warning: the change is done and the
+// next refresh shows what the broker reports. Any other error is an error,
+// for example a refused describe, because it can need action from the user.
+func addQuotaSettleDiagnostic(diags *diag.Diagnostics, summary string, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		diags.AddWarning(summary, quotaErrorMessage(err))
+		return
+	}
+	addQuotaError(diags, summary, err)
 }
 
 func addQuotaError(diags *diag.Diagnostics, summary string, err error) {

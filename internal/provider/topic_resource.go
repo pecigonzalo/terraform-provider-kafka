@@ -98,8 +98,11 @@ func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 				Validators:          []validator.Int64{int64validator.AtLeast(1)},
 			},
 			"configuration": schema.MapAttribute{
-				MarkdownDescription: "Topic configuration overrides. Only the keys set here are managed; " +
-					"any other topic configuration is left at the broker default.",
+				MarkdownDescription: "Topic configuration overrides. Terraform manages only the keys set here. " +
+					"When you change this map, Terraform sets the keys in it and removes the keys that you took out, " +
+					"so those settings return to the broker default. Terraform does not change any other topic " +
+					"setting, so a setting made outside Terraform stays as it is and does not show as a difference. " +
+					"Changing this map needs Kafka 2.3 or later.",
 				ElementType: types.StringType,
 				Optional:    true,
 			},
@@ -296,37 +299,13 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 
-	if !data.Config.Equal(state.Config) {
-		tflog.Info(ctx, "Updating topic configuration")
-		err := r.updateConfig(ctx, data)
-		if err != nil {
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic configuration, got error: %s", err))
-			return
-		}
+	saved, err := newTopicUpdater(r.kafka).update(ctx, *data, *state)
+	if err != nil {
+		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic, got error: %s", err))
 	}
-	if !data.ReplicationFactor.Equal(state.ReplicationFactor) {
-		tflog.Info(ctx, "Updating topic replication factor")
-		err := newTopicUpdater(r.kafka).replicationFactor(ctx, data.Name.ValueString(), int(data.ReplicationFactor.ValueInt64()))
-		if err != nil {
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic replication factor, got error: %s", err))
-			return
-		}
-	}
-	if !data.Partitions.Equal(state.Partitions) {
-		tflog.Info(ctx, "Updating topic partitions")
-		err := newTopicUpdater(r.kafka).partitions(ctx, data.Name.ValueString(), int(data.Partitions.ValueInt64()))
-		if err != nil {
-			resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic partitions, got error: %s", err))
-			return
-		}
-	}
-
-	// Save updated data into Terraform state
-	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-}
-
-func (r *topicResource) updateConfig(ctx context.Context, data *TopicResourceModel) error {
-	return r.kafka.AlterTopicConfig(ctx, data.Name.ValueString(), configMap(data.Config))
+	// Save what the cluster has now. After a failed step this is the prior
+	// state with the steps that worked already applied.
+	resp.Diagnostics.Append(resp.State.Set(ctx, &saved)...)
 }
 
 // configMap converts a Terraform map of strings into a plain map, dropping

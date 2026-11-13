@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-log/tflog"
+
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/placement"
 )
@@ -19,6 +21,7 @@ type topicOperations interface {
 	CreatePartitions(ctx context.Context, topic string, total int, replicas [][]int) error
 	AlterPartitionReassignments(ctx context.Context, topic string, assignments []kafkaclient.PartitionAssignment) error
 	ListPartitionReassignments(ctx context.Context, topic string, partitions ...int) ([]kafkaclient.PartitionReassignment, error)
+	AlterTopicConfig(ctx context.Context, name string, previous, config map[string]string) error
 	Timeout() time.Duration
 }
 
@@ -30,6 +33,10 @@ type topicUpdater struct {
 	// checks while waiting for a reassignment or for added partitions.
 	reassignmentInterval time.Duration
 	partitionInterval    time.Duration
+	// settleInterval and settleWindow set how often, and for how long, a topic
+	// that is reported as not found is read again.
+	settleInterval time.Duration
+	settleWindow   time.Duration
 }
 
 func newTopicUpdater(client topicOperations) *topicUpdater {
@@ -37,6 +44,74 @@ func newTopicUpdater(client topicOperations) *topicUpdater {
 		client:               client,
 		reassignmentInterval: reassignmentPollInterval,
 		partitionInterval:    partitionPollInterval,
+		settleInterval:       readSettleInterval,
+		settleWindow:         readSettleWindow,
+	}
+}
+
+// update applies the differences between state and plan: first the
+// configuration, then the replication factor, then the partition count. It
+// returns the model to save. When a step fails, the model holds the prior state
+// with the attributes of the steps that succeeded already changed, so state
+// matches the cluster, and the error says which step failed.
+func (u *topicUpdater) update(ctx context.Context, plan, state TopicResourceModel) (TopicResourceModel, error) {
+	saved := state
+	topic := plan.Name.ValueString()
+
+	if !plan.Config.Equal(state.Config) {
+		tflog.Info(ctx, "Updating topic configuration")
+		if err := u.client.AlterTopicConfig(ctx, topic, configMap(state.Config), configMap(plan.Config)); err != nil {
+			return saved, fmt.Errorf("unable to update topic configuration: %w", err)
+		}
+		saved.Config = plan.Config
+	}
+	if !plan.ReplicationFactor.Equal(state.ReplicationFactor) {
+		tflog.Info(ctx, "Updating topic replication factor")
+		if err := u.replicationFactor(ctx, topic, int(plan.ReplicationFactor.ValueInt64())); err != nil {
+			return saved, fmt.Errorf("unable to update topic replication factor: %w", err)
+		}
+		saved.ReplicationFactor = plan.ReplicationFactor
+	}
+	if !plan.Partitions.Equal(state.Partitions) {
+		tflog.Info(ctx, "Updating topic partitions")
+		if err := u.partitions(ctx, topic, int(plan.Partitions.ValueInt64())); err != nil {
+			return saved, fmt.Errorf("unable to update topic partitions: %w", err)
+		}
+		saved.Partitions = plan.Partitions
+	}
+	return plan, nil
+}
+
+// readTopic reads the topic. A broker that has not caught up can report a
+// topic as not found, so it reads again within the settle window. A topic that
+// is still not found after the window gives an error that wraps
+// [kafkaclient.ErrTopicNotFound]. Other errors are returned at once.
+func (u *topicUpdater) readTopic(ctx context.Context, topic string) (kafkaclient.TopicInfo, error) {
+	var (
+		info    kafkaclient.TopicInfo
+		lastErr error
+	)
+	waitCtx, cancel := context.WithTimeout(ctx, u.settleWindow)
+	defer cancel()
+	err := pollUntil(waitCtx, u.settleInterval, func(ctx context.Context) (bool, error) {
+		got, err := u.client.Topic(ctx, topic)
+		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
+			lastErr = err
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		info = got
+		return true, nil
+	})
+	switch {
+	case err == nil:
+		return info, nil
+	case lastErr != nil && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		return kafkaclient.TopicInfo{}, lastErr
+	default:
+		return kafkaclient.TopicInfo{}, err
 	}
 }
 
@@ -54,7 +129,7 @@ func (u *topicUpdater) replicationFactor(ctx context.Context, topic string, want
 		return errors.New("replication factor cannot be higher than the number of brokers")
 	}
 
-	info, err := u.client.Topic(ctx, topic)
+	info, err := u.readTopic(ctx, topic)
 	if err != nil {
 		return err
 	}
@@ -64,7 +139,10 @@ func (u *topicUpdater) replicationFactor(ctx context.Context, topic string, want
 		return err
 	}
 	if have == want {
-		return nil
+		// The replica lists can already show the target while data still moves,
+		// for example after an earlier attempt timed out. Wait for the
+		// reassignment to end before reporting success.
+		return u.waitForReassignment(ctx, topic, want)
 	}
 
 	current := placementPartitions(info)
@@ -95,10 +173,16 @@ func (u *topicUpdater) replicationFactor(ctx context.Context, topic string, want
 
 	// The reassignment is asynchronous. Wait for it to finish so that the
 	// next Read and the saved state reflect the cluster, not the plan.
+	return u.waitForReassignment(ctx, topic, want)
+}
+
+// waitForReassignment waits until reassignmentDone reports true, for at most
+// the client timeout.
+func (u *topicUpdater) waitForReassignment(ctx context.Context, topic string, want int) error {
 	timeout := u.client.Timeout()
 	waitCtx, cancel := withOptionalTimeout(ctx, timeout)
 	defer cancel()
-	err = pollUntil(waitCtx, u.reassignmentInterval, func(ctx context.Context) (bool, error) {
+	err := pollUntil(waitCtx, u.reassignmentInterval, func(ctx context.Context) (bool, error) {
 		return u.reassignmentDone(ctx, topic, want)
 	})
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -148,7 +232,7 @@ func (u *topicUpdater) partitions(ctx context.Context, topic string, want int) e
 	if err != nil {
 		return err
 	}
-	info, err := u.client.Topic(ctx, topic)
+	info, err := u.readTopic(ctx, topic)
 	if err != nil {
 		return err
 	}

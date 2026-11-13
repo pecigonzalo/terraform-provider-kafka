@@ -23,9 +23,11 @@ FEATURES:
 
 * **New Resource:** `kafka_acl` manages one ACL entry. Kafka cannot change an ACL, so a change to any attribute replaces the entry. To import, use the id `resource_type|resource_name|resource_pattern_type|principal|host|operation|permission_type`, for example `topic|orders|literal|User:alice|*|read|allow`. In a value, write `%` as `%25` and `|` as `%7C`. (#177)
 * **New Resource:** `kafka_quota` manages the quotas of one `user`, `client_id` or `ip` entity. An entity can be the default entity. The limits are `producer_byte_rate`, `consumer_byte_rate`, `request_percentage`, `controller_mutation_rate` and `connection_creation_rate`. Kafka 2.6 or later is necessary. To import, use an id such as `user=alice,client-id=billing`, `ip=10.0.0.1` or `user=<default>`. (#178)
+* **New Data Source:** `kafka_acls` lists the ACL entries that match the filters. The filters are `resource_type`, `resource_name`, `resource_pattern_type`, `principal`, `host`, `operation` and `permission_type`. A filter that you do not set matches all values. The result is the list `acls`. It is sorted by `id`. Each entry has the attributes and the `id` of `kafka_acl`. (#184)
 
 ENHANCEMENTS:
 
+* resource/`kafka_acl`: Create and delete now wait for as long as the provider `timeout` allows, until the broker shows the change. If this takes longer, the error tells you to run `terraform apply` again. (#184)
 * resource/`kafka_topic`: When you change `replication_factor`, apply now waits until Kafka finishes the change. If this takes longer than the provider `timeout`, the error tells you to run `terraform plan`. (#161)
 * resource/`kafka_topic`: When you change `partitions` or `replication_factor`, the provider reads the current topic state from the broker. In v0.5.3, it could use old Terraform state. (#153, #181)
 * resource/`kafka_topic`: When more than one topic fails to create, delete or change, the error now lists all of them. Before, it showed only the first. (#157)

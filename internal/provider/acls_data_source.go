@@ -54,72 +54,77 @@ func (d *aclsDataSource) Metadata(_ context.Context, req datasource.MetadataRequ
 
 func (d *aclsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Lists the Kafka ACL entries that match the given filters. A filter that is not set " +
-			"matches everything, so without any filter every ACL on the cluster is returned. " +
-			"Kafka has no pagination for ACLs: all matches are returned.\n\n" +
-			"The data source reports what the broker answers when it is read. Brokers learn ACLs asynchronously, " +
-			"so to read the ACLs of a `kafka_acl` resource created in the same configuration, make the filter " +
-			"depend on the resource (for example by referencing one of its attributes) so the read happens after " +
-			"the create has settled.\n\n" +
-			"The provider's principal needs the `Describe` operation on the `cluster` resource.",
+		MarkdownDescription: "Lists the Kafka ACL entries that match the filters. " +
+			"A filter that is not set matches all values. " +
+			"If you set no filter, the data source returns all ACLs of the cluster. " +
+			"Kafka has no pagination for ACLs, so the data source returns all matches.\n\n" +
+			"The data source shows what the broker reports when Terraform reads it. " +
+			"Brokers learn ACLs asynchronously. " +
+			"To read an ACL that a `kafka_acl` resource creates in the same configuration, " +
+			"make the filter use an attribute of that resource. " +
+			"Then Terraform reads the data source after the create is complete.\n\n" +
+			"The provider principal needs the `Describe` operation on the `cluster` resource.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
-				MarkdownDescription: "Identifier of the data source, derived from the filters. It has no meaning " +
-					"outside Terraform; use the `id` of the entries in `acls` to refer to an ACL.",
+				MarkdownDescription: "Identifier of the data source. Terraform derives it from the filters. " +
+					"To refer to one ACL, use the `id` of an entry in `acls`.",
 				Computed: true,
 			},
 			"resource_type": schema.StringAttribute{
-				MarkdownDescription: "Only return ACLs for this type of resource: `any` or " +
-					enumDocs(aclResourceTypes) + ". `any` is the same as not setting it.",
+				MarkdownDescription: "Return only ACLs for this type of resource: `any` or " +
+					enumDocs(aclResourceTypes) + ". `any` is the same as no value.",
 				Optional:   true,
 				Validators: []validator.String{canonicalEnum(kafkaclient.ParseACLResourceTypeFilter)},
 			},
 			"resource_name": schema.StringAttribute{
-				MarkdownDescription: "Only return ACLs for the resource with this name, for example a topic name. " +
-					"With the `literal` pattern type the name must match exactly: ACLs for the `*` wildcard name " +
-					"are only returned when `*` is asked for. Use the `match` pattern type to also get the " +
-					"wildcard and prefixed ACLs that apply to the name.",
+				MarkdownDescription: "Return only ACLs for the resource with this name, for example a topic name. " +
+					"With the `literal` pattern type, the name must be the same. " +
+					"ACLs for the `*` name are only in the result if you set `*`. " +
+					"With the `match` pattern type, the result also has the wildcard and prefixed ACLs that apply to the name.",
 				Optional: true,
 			},
 			"resource_pattern_type": schema.StringAttribute{
-				MarkdownDescription: "Which kind of ACLs `resource_name` selects: `literal` (ACLs written for " +
-					"exactly that name), `prefixed` (ACLs written for exactly that prefix), `match` (every ACL " +
-					"that applies to the name, including wildcard and prefixed ACLs) or `any` (literal and " +
-					"prefixed ACLs with that name). `match` and `any` can only be used in filters, not in " +
-					"`kafka_acl`. Not setting it is the same as `any`.",
+				MarkdownDescription: "The kind of ACL that `resource_name` selects. " +
+					"`literal`: ACLs for exactly that name. " +
+					"`prefixed`: ACLs for exactly that prefix. " +
+					"`match`: all ACLs that apply to the name, with wildcard and prefixed ACLs. " +
+					"`any`: literal and prefixed ACLs with that name. " +
+					"You can use `match` and `any` only in filters, not in `kafka_acl`. " +
+					"No value is the same as `any`.",
 				Optional:   true,
 				Validators: []validator.String{canonicalEnum(kafkaclient.ParseACLPatternTypeFilter)},
 			},
 			"principal": schema.StringAttribute{
-				MarkdownDescription: "Only return ACLs for this principal, as `Type:name`, for example `User:alice`. " +
-					"The principal must match exactly: `User:*` only returns ACLs written for every user.",
+				MarkdownDescription: "Return only ACLs for this principal, as `Type:name`, for example `User:alice`. " +
+					"The principal must be the same. `User:*` returns only ACLs for all users.",
 				Optional: true,
 			},
 			"host": schema.StringAttribute{
-				MarkdownDescription: "Only return ACLs for this host. The host must match exactly: `*` only " +
-					"returns ACLs written for every host.",
+				MarkdownDescription: "Return only ACLs for this host. " +
+					"The host must be the same. `*` returns only ACLs for all hosts.",
 				Optional: true,
 			},
 			"operation": schema.StringAttribute{
-				MarkdownDescription: "Only return ACLs for this operation: `any` or " + enumDocs(aclOperations) +
-					". `any` is the same as not setting it.",
+				MarkdownDescription: "Return only ACLs for this operation: `any` or " + enumDocs(aclOperations) +
+					". `any` is the same as no value.",
 				Optional:   true,
 				Validators: []validator.String{canonicalEnum(kafkaclient.ParseACLOperationFilter)},
 			},
 			"permission_type": schema.StringAttribute{
-				MarkdownDescription: "Only return ACLs that `allow` or `deny`, or `any` of them. `any` is the " +
-					"same as not setting it.",
+				MarkdownDescription: "Return only ACLs that `allow` or `deny`, or `any` of them. " +
+					"`any` is the same as no value.",
 				Optional:   true,
 				Validators: []validator.String{canonicalEnum(kafkaclient.ParseACLPermissionTypeFilter)},
 			},
 			"acls": schema.ListNestedAttribute{
-				MarkdownDescription: "The matching ACLs, sorted by `id`. Empty when nothing matches.",
+				MarkdownDescription: "The ACLs that match, sorted by `id`. The list is empty if no ACL matches.",
 				Computed:            true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"id": schema.StringAttribute{
-							MarkdownDescription: "ACL id, in the format of the `kafka_acl` resource id and so usable " +
-								"with `terraform import`: the seven attributes joined by `|`. " +
+							MarkdownDescription: "ACL id. It has the same format as the `id` of the `kafka_acl` resource, " +
+								"so you can use it with `terraform import`. " +
+								"It is the seven attributes joined by `|`. " +
 								"Example: `topic|orders|literal|User:alice|*|read|allow`.",
 							Computed: true,
 						},

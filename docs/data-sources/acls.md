@@ -3,18 +3,18 @@
 page_title: "kafka_acls Data Source - terraform-provider-kafka"
 subcategory: ""
 description: |-
-  Lists the Kafka ACL entries that match the given filters. A filter that is not set matches everything, so without any filter every ACL on the cluster is returned. Kafka has no pagination for ACLs: all matches are returned.
-  The data source reports what the broker answers when it is read. Brokers learn ACLs asynchronously, so to read the ACLs of a kafka_acl resource created in the same configuration, make the filter depend on the resource (for example by referencing one of its attributes) so the read happens after the create has settled.
-  The provider's principal needs the Describe operation on the cluster resource.
+  Lists the Kafka ACL entries that match the filters. A filter that is not set matches all values. If you set no filter, the data source returns all ACLs of the cluster. Kafka has no pagination for ACLs, so the data source returns all matches.
+  The data source shows what the broker reports when Terraform reads it. Brokers learn ACLs asynchronously. To read an ACL that a kafka_acl resource creates in the same configuration, make the filter use an attribute of that resource. Then Terraform reads the data source after the create is complete.
+  The provider principal needs the Describe operation on the cluster resource.
 ---
 
 # kafka_acls (Data Source)
 
-Lists the Kafka ACL entries that match the given filters. A filter that is not set matches everything, so without any filter every ACL on the cluster is returned. Kafka has no pagination for ACLs: all matches are returned.
+Lists the Kafka ACL entries that match the filters. A filter that is not set matches all values. If you set no filter, the data source returns all ACLs of the cluster. Kafka has no pagination for ACLs, so the data source returns all matches.
 
-The data source reports what the broker answers when it is read. Brokers learn ACLs asynchronously, so to read the ACLs of a `kafka_acl` resource created in the same configuration, make the filter depend on the resource (for example by referencing one of its attributes) so the read happens after the create has settled.
+The data source shows what the broker reports when Terraform reads it. Brokers learn ACLs asynchronously. To read an ACL that a `kafka_acl` resource creates in the same configuration, make the filter use an attribute of that resource. Then Terraform reads the data source after the create is complete.
 
-The provider's principal needs the `Describe` operation on the `cluster` resource.
+The provider principal needs the `Describe` operation on the `cluster` resource.
 
 ## Example Usage
 
@@ -46,18 +46,18 @@ output "alice_read_acl_ids" {
 
 ### Optional
 
-- `host` (String) Only return ACLs for this host. The host must match exactly: `*` only returns ACLs written for every host.
-- `operation` (String) Only return ACLs for this operation: `any` or `all`, `read`, `write`, `create`, `delete`, `alter`, `describe`, `cluster_action`, `describe_configs`, `alter_configs`, `idempotent_write`. `any` is the same as not setting it.
-- `permission_type` (String) Only return ACLs that `allow` or `deny`, or `any` of them. `any` is the same as not setting it.
-- `principal` (String) Only return ACLs for this principal, as `Type:name`, for example `User:alice`. The principal must match exactly: `User:*` only returns ACLs written for every user.
-- `resource_name` (String) Only return ACLs for the resource with this name, for example a topic name. With the `literal` pattern type the name must match exactly: ACLs for the `*` wildcard name are only returned when `*` is asked for. Use the `match` pattern type to also get the wildcard and prefixed ACLs that apply to the name.
-- `resource_pattern_type` (String) Which kind of ACLs `resource_name` selects: `literal` (ACLs written for exactly that name), `prefixed` (ACLs written for exactly that prefix), `match` (every ACL that applies to the name, including wildcard and prefixed ACLs) or `any` (literal and prefixed ACLs with that name). `match` and `any` can only be used in filters, not in `kafka_acl`. Not setting it is the same as `any`.
-- `resource_type` (String) Only return ACLs for this type of resource: `any` or `topic`, `group`, `cluster`, `transactional_id`, `delegation_token`. `any` is the same as not setting it.
+- `host` (String) Return only ACLs for this host. The host must be the same. `*` returns only ACLs for all hosts.
+- `operation` (String) Return only ACLs for this operation: `any` or `all`, `read`, `write`, `create`, `delete`, `alter`, `describe`, `cluster_action`, `describe_configs`, `alter_configs`, `idempotent_write`. `any` is the same as no value.
+- `permission_type` (String) Return only ACLs that `allow` or `deny`, or `any` of them. `any` is the same as no value.
+- `principal` (String) Return only ACLs for this principal, as `Type:name`, for example `User:alice`. The principal must be the same. `User:*` returns only ACLs for all users.
+- `resource_name` (String) Return only ACLs for the resource with this name, for example a topic name. With the `literal` pattern type, the name must be the same. ACLs for the `*` name are only in the result if you set `*`. With the `match` pattern type, the result also has the wildcard and prefixed ACLs that apply to the name.
+- `resource_pattern_type` (String) The kind of ACL that `resource_name` selects. `literal`: ACLs for exactly that name. `prefixed`: ACLs for exactly that prefix. `match`: all ACLs that apply to the name, with wildcard and prefixed ACLs. `any`: literal and prefixed ACLs with that name. You can use `match` and `any` only in filters, not in `kafka_acl`. No value is the same as `any`.
+- `resource_type` (String) Return only ACLs for this type of resource: `any` or `topic`, `group`, `cluster`, `transactional_id`, `delegation_token`. `any` is the same as no value.
 
 ### Read-Only
 
-- `acls` (Attributes List) The matching ACLs, sorted by `id`. Empty when nothing matches. (see [below for nested schema](#nestedatt--acls))
-- `id` (String) Identifier of the data source, derived from the filters. It has no meaning outside Terraform; use the `id` of the entries in `acls` to refer to an ACL.
+- `acls` (Attributes List) The ACLs that match, sorted by `id`. The list is empty if no ACL matches. (see [below for nested schema](#nestedatt--acls))
+- `id` (String) Identifier of the data source. Terraform derives it from the filters. To refer to one ACL, use the `id` of an entry in `acls`.
 
 <a id="nestedatt--acls"></a>
 ### Nested Schema for `acls`
@@ -65,7 +65,7 @@ output "alice_read_acl_ids" {
 Read-Only:
 
 - `host` (String) Host the ACL applies to.
-- `id` (String) ACL id, in the format of the `kafka_acl` resource id and so usable with `terraform import`: the seven attributes joined by `|`. Example: `topic|orders|literal|User:alice|*|read|allow`.
+- `id` (String) ACL id. It has the same format as the `id` of the `kafka_acl` resource, so you can use it with `terraform import`. It is the seven attributes joined by `|`. Example: `topic|orders|literal|User:alice|*|read|allow`.
 - `operation` (String) Operation the ACL allows or denies.
 - `permission_type` (String) Whether the ACL allows or denies the operation.
 - `principal` (String) Principal the ACL applies to.

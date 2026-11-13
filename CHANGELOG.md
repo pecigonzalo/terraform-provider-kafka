@@ -51,7 +51,7 @@ NOTES:
     * This changes which brokers hold the new replicas. It does not change if the result is correct. (#180, #181)
 * provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers. (#173)
 * data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
-* The project now has a `LICENSE` file with the MIT license. Before this, the repository had no license file.
+* The project now has a `LICENSE` file with the MIT license. Before this, the repository had no license file. (#192)
 
 ## 0.5.3 (2026-07-15)
 

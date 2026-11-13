@@ -27,9 +27,10 @@ const (
 	// is visible.
 	aclSettleInterval = 250 * time.Millisecond
 
-	// aclSettleTimeout bounds how long Create and Delete wait for a change to
-	// become visible on the broker that answers describe requests.
-	aclSettleTimeout = 30 * time.Second
+	// aclDefaultTimeout bounds how long Create and Delete wait for a change to
+	// become visible when the client has no timeout configured. Normally the
+	// provider timeout is used, see aclResource.settleTimeout.
+	aclDefaultTimeout = 5 * time.Minute
 
 	// aclReadSettleWindow bounds how long Read keeps re-describing an ACL that
 	// is missing before it is reported as gone.
@@ -52,6 +53,7 @@ var (
 
 // aclAPI is the part of the Kafka client the ACL resource uses.
 type aclAPI interface {
+	Timeout() time.Duration
 	CreateACL(ctx context.Context, acl kafkaclient.ACL) error
 	DescribeACLs(ctx context.Context, filter kafkaclient.ACLFilter) ([]kafkaclient.ACL, error)
 	DeleteACLs(ctx context.Context, filter kafkaclient.ACLFilter) (int, error)
@@ -61,7 +63,6 @@ type aclAPI interface {
 func NewACLResource() resource.Resource {
 	return &aclResource{
 		settleInterval: aclSettleInterval,
-		settleTimeout:  aclSettleTimeout,
 		readWindow:     aclReadSettleWindow,
 	}
 }
@@ -70,10 +71,20 @@ type aclResource struct {
 	client aclAPI
 
 	// Timings for waiting until ACL changes are visible. They are fields so
-	// tests can shorten them.
+	// tests can shorten them. Writes wait up to the client's timeout (the
+	// provider timeout) instead of a fixed bound, see settleTimeout.
 	settleInterval time.Duration
-	settleTimeout  time.Duration
 	readWindow     time.Duration
+}
+
+// settleTimeout bounds how long Create and Delete wait for a change to become
+// visible on the broker that answers describe requests: the provider timeout,
+// or aclDefaultTimeout when none is configured.
+func (r *aclResource) settleTimeout() time.Duration {
+	if t := r.client.Timeout(); t > 0 {
+		return t
+	}
+	return aclDefaultTimeout
 }
 
 // ACLResourceModel describes the kafka_acl resource data model.
@@ -134,13 +145,17 @@ func (r *aclResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *
 			},
 			"principal": schema.StringAttribute{
 				MarkdownDescription: "Principal the ACL applies to, as `Type:name`, for example `User:alice`. " +
-					"`User:*` matches every user.",
+					"`User:*` matches every user. " +
+					"Write the type `User` with this exact case, because Kafka compares the type with exact case. " +
+					"Other types are valid, because Kafka allows custom principal types.",
 				Required:      true,
 				PlanModifiers: replace,
 			},
 			"host": schema.StringAttribute{
-				MarkdownDescription: "Host the principal is allowed or denied access from. `*` (the default) " +
-					"matches every host.",
+				MarkdownDescription: "Host the principal is allowed or denied access from. " +
+					"Use `*` (the default) for every host, or one IP address (IPv4 or IPv6). " +
+					"Kafka matches hosts exactly. It does not support network ranges, such as `10.0.0.0/8`, " +
+					"or host names.",
 				Optional:      true,
 				Computed:      true,
 				Default:       stringdefault.StaticString("*"),
@@ -176,9 +191,14 @@ func (r *aclResource) Configure(_ context.Context, req resource.ConfigureRequest
 		return
 	}
 	// A nil *Client must not become a non-nil interface.
-	if client != nil {
-		r.client = client
+	if client == nil {
+		return
 	}
+	if client.Reader == nil {
+		resp.Diagnostics.AddError("Missing Kafka client", "The provider supplied a Kafka client that is not connected. Please report this issue to the provider developers.")
+		return
+	}
+	r.client = client
 }
 
 // ValidateConfig applies the cross-attribute rules Kafka enforces (for
@@ -228,7 +248,7 @@ func (r *aclResource) Create(ctx context.Context, req resource.CreateRequest, re
 		return
 	}
 
-	if err := r.waitForACL(ctx, acl, true, r.settleTimeout); err != nil {
+	if err := r.waitForACL(ctx, acl, true, r.settleTimeout()); err != nil {
 		addACLError(&resp.Diagnostics, "ACL created but not visible yet", err)
 	}
 }
@@ -280,7 +300,7 @@ func (r *aclResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 		addACLError(&resp.Diagnostics, "Unable to delete ACL", err)
 		return
 	}
-	if err := r.waitForACL(ctx, acl, false, r.settleTimeout); err != nil {
+	if err := r.waitForACL(ctx, acl, false, r.settleTimeout()); err != nil {
 		addACLError(&resp.Diagnostics, "ACL deleted but still visible", err)
 	}
 }
@@ -291,16 +311,7 @@ func (r *aclResource) ImportState(ctx context.Context, req resource.ImportStateR
 		resp.Diagnostics.AddError("Invalid ACL import id", err.Error())
 		return
 	}
-	data := ACLResourceModel{
-		ID:                  types.StringValue(encodeACLID(acl)),
-		ResourceType:        types.StringValue(string(acl.ResourceType)),
-		ResourceName:        types.StringValue(acl.ResourceName),
-		ResourcePatternType: types.StringValue(string(acl.PatternType)),
-		Principal:           types.StringValue(acl.Principal),
-		Host:                types.StringValue(acl.Host),
-		Operation:           types.StringValue(string(acl.Operation)),
-		PermissionType:      types.StringValue(string(acl.PermissionType)),
-	}
+	data := aclToModel(acl)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), data.ID)...)
 }
@@ -325,6 +336,20 @@ func (m ACLResourceModel) acl() (acl kafkaclient.ACL, known bool) {
 		Operation:      kafkaclient.ACLOperation(m.Operation.ValueString()),
 		PermissionType: kafkaclient.ACLPermissionType(m.PermissionType.ValueString()),
 	}, known
+}
+
+// aclToModel converts an ACL to the model, including its id.
+func aclToModel(acl kafkaclient.ACL) ACLResourceModel {
+	return ACLResourceModel{
+		ID:                  types.StringValue(encodeACLID(acl)),
+		ResourceType:        types.StringValue(string(acl.ResourceType)),
+		ResourceName:        types.StringValue(acl.ResourceName),
+		ResourcePatternType: types.StringValue(string(acl.PatternType)),
+		Principal:           types.StringValue(acl.Principal),
+		Host:                types.StringValue(acl.Host),
+		Operation:           types.StringValue(string(acl.Operation)),
+		PermissionType:      types.StringValue(string(acl.PermissionType)),
+	}
 }
 
 // exactACLFilter returns a filter that matches only the given ACL.
@@ -385,17 +410,34 @@ func addACLError(diags *diag.Diagnostics, summary string, err error) {
 	diags.AddError(summary, aclErrorDetail(err))
 }
 
-// aclErrorDetail maps the kafkaclient sentinel errors to actionable advice and
-// keeps the underlying error text.
+// aclAccess says what a caller does with ACLs, which decides the advice given
+// when the broker refuses it.
+type aclAccess struct {
+	verb      string // "manage" or "read"
+	operation string // cluster operation the principal needs
+}
+
+var (
+	aclManageAccess = aclAccess{verb: "manage", operation: "Alter"}
+	aclReadAccess   = aclAccess{verb: "read", operation: "Describe"}
+)
+
+// aclErrorDetail maps the kafkaclient sentinel errors to actionable advice for
+// the kafka_acl resource and keeps the underlying error text.
 func aclErrorDetail(err error) string {
+	return aclErrorDetailFor(aclManageAccess, err)
+}
+
+// aclErrorDetailFor is aclErrorDetail for the given kind of access.
+func aclErrorDetailFor(access aclAccess, err error) string {
 	switch {
 	case errors.Is(err, kafkaclient.ErrSecurityDisabled):
-		return "The broker has no authorizer configured, so ACLs cannot be managed. " +
-			"Enable one (for example `authorizer.class.name` on the brokers) before using kafka_acl.\n\n" +
+		return "The broker has no authorizer configured, so you cannot " + access.verb + " ACLs. " +
+			"Enable one (for example `authorizer.class.name` on the brokers) first.\n\n" +
 			"Error: " + err.Error()
 	case errors.Is(err, kafkaclient.ErrNotAuthorized):
-		return "The provider's principal is not authorized to manage ACLs. " +
-			"Grant it the Alter operation on the cluster resource.\n\n" +
+		return "The provider's principal is not authorized to " + access.verb + " ACLs. " +
+			"Grant it the " + access.operation + " operation on the cluster resource.\n\n" +
 			"Error: " + err.Error()
 	case errors.Is(err, kafkaclient.ErrInvalidACL):
 		return "The ACL is not valid: " + err.Error()

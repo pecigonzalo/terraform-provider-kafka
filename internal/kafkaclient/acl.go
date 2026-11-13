@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 
@@ -264,8 +265,9 @@ var validOperations = map[ACLResourceType][]ACLOperation{
 //
 //   - every enum must be a concrete value (no any/match);
 //   - resource name, principal and host must be non-empty;
-//   - principal must have the form "Type:name" with both parts non-empty;
-//   - host must be "*" or contain no '*';
+//   - principal must have the form "Type:name" with both parts non-empty, and
+//     the type "User" must be written with that exact case;
+//   - host must be "*" or an IP address;
 //   - the cluster resource requires name [ClusterResourceName] and a literal pattern;
 //   - a prefixed pattern cannot use the wildcard name "*";
 //   - the operation must be supported by the resource type.
@@ -321,6 +323,10 @@ func joinStrings[T ~string](vs []T) string {
 	return strings.Join(ss, ", ")
 }
 
+// validatePrincipal checks that p has the form "Type:name" with a type and a
+// name. Kafka compares the type with exact case, and the type "User" is the
+// one every broker knows, so another case of "user" is an error. Other types
+// are valid, because Kafka allows custom principal types.
 func validatePrincipal(p string) error {
 	if p == "" {
 		return fmt.Errorf("%w: principal must not be empty", ErrInvalidACL)
@@ -329,17 +335,26 @@ func validatePrincipal(p string) error {
 	if !ok || typ == "" || name == "" {
 		return fmt.Errorf(`%w: principal %q must have the form "Type:name", e.g. "User:alice"`, ErrInvalidACL, p)
 	}
+	if typ != "User" && strings.EqualFold(typ, "user") {
+		return fmt.Errorf(`%w: principal %q has the type %q. Kafka compares the type with exact case, so write "User:%s"`,
+			ErrInvalidACL, p, typ, name)
+	}
 	return nil
 }
 
+// validateHost checks that h is "*" or an IP address. Kafka matches the host
+// of an ACL exactly. It does not support host names, partial wildcards or
+// network ranges, so an ACL with such a value never matches any client.
 func validateHost(h string) error {
 	if h == "" {
 		return fmt.Errorf(`%w: host must not be empty (use "*" for all hosts)`, ErrInvalidACL)
 	}
-	if h != "*" && strings.Contains(h, "*") {
-		return fmt.Errorf(`%w: host %q: the wildcard "*" is only allowed as the whole host`, ErrInvalidACL, h)
+	if h == "*" || net.ParseIP(h) != nil {
+		return nil
 	}
-	return nil
+	return fmt.Errorf(`%w: host %q must be "*" or an IP address. Kafka matches hosts exactly. `+
+		`It does not support network ranges (such as 10.0.0.0/8), partial wildcards or host names`,
+		ErrInvalidACL, h)
 }
 
 // isMatchAll reports whether the filter has no restriction at all.
@@ -361,6 +376,51 @@ func (f ACLFilter) isMatchAll() bool {
 func (f ACLFilter) Validate() error {
 	_, err := f.toKafka()
 	return err
+}
+
+// CheckConsistency reports filters whose fields cannot all match the same
+// ACL, because no ACL Kafka accepts has that combination. Such a filter is
+// valid on the wire and simply matches nothing, so this is for catching
+// mistakes early. It runs [ACLFilter.Validate] first and returns an error
+// wrapping [ErrInvalidACL]. Rules, applied to the fields that are set:
+//
+//   - the cluster resource type requires resource name [ClusterResourceName]
+//     and not a prefixed pattern;
+//   - a prefixed pattern cannot be combined with the wildcard name "*";
+//   - the operation must be supported by the resource type.
+func (f ACLFilter) CheckConsistency() error {
+	if err := f.Validate(); err != nil {
+		return err
+	}
+	// Validate guarantees these parse.
+	rt, _ := ParseACLResourceTypeFilter(orAnyString(string(f.ResourceType)))
+	pt, _ := ParseACLPatternTypeFilter(orAnyString(string(f.PatternType)))
+	op, _ := ParseACLOperationFilter(orAnyString(string(f.Operation)))
+
+	if rt == ACLResourceTypeCluster {
+		if f.ResourceName != "" && f.ResourceName != ClusterResourceName {
+			return fmt.Errorf("%w: resource name for resource type cluster must be %q, got %q",
+				ErrInvalidACL, ClusterResourceName, f.ResourceName)
+		}
+		if pt == ACLPatternTypePrefixed {
+			return fmt.Errorf("%w: resource type cluster has no prefixed ACLs, its pattern type is literal", ErrInvalidACL)
+		}
+	}
+	if pt == ACLPatternTypePrefixed && f.ResourceName == "*" {
+		return fmt.Errorf("%w: pattern type prefixed cannot be combined with the wildcard resource name %q; use literal", ErrInvalidACL, "*")
+	}
+	if rt != ACLResourceTypeAny && op != ACLOperationAny && !slices.Contains(validOperations[rt], op) {
+		return fmt.Errorf("%w: operation %q is not valid for resource type %q, valid operations are: %s",
+			ErrInvalidACL, op, rt, joinStrings(validOperations[rt]))
+	}
+	return nil
+}
+
+func orAnyString(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "any"
+	}
+	return s
 }
 
 // toKafka converts the filter to kafka-go's wire form, validating it.

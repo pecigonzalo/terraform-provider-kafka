@@ -251,7 +251,7 @@ func (r *aclResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 
 	if err := r.waitForACL(ctx, acl, true, r.settleTimeout()); err != nil {
-		addACLSettleWarning(&resp.Diagnostics, "ACL created but not visible yet", err)
+		addSettleWarning(&resp.Diagnostics, "ACL created but not visible yet", aclErrorDetail(err))
 	}
 }
 
@@ -305,7 +305,7 @@ func (r *aclResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 	// The broker accepted the delete. If the wait ends early, the result is a
 	// warning, so Terraform still removes the resource from state.
 	if err := r.waitForACL(ctx, acl, false, r.settleTimeout()); err != nil {
-		addACLSettleWarning(&resp.Diagnostics, "ACL deleted but still visible", err)
+		addSettleWarning(&resp.Diagnostics, "ACL deleted but still visible", aclErrorDetail(err))
 	}
 }
 
@@ -453,14 +453,16 @@ func aclLogFields(acl kafkaclient.ACL) map[string]any {
 	}
 }
 
-// addACLSettleWarning reports a wait that ended before the broker showed a
-// change that it accepted. It is a warning: the change is done, and a later
-// refresh shows what the broker reports.
-func addACLSettleWarning(diags *diag.Diagnostics, summary string, err error) {
+// addSettleWarning reports a wait that ended before the broker showed a change
+// that it accepted. It is a warning for every cause, for example a timeout or
+// a refused describe: the change is done, and an error would taint the
+// resource. The next refresh shows what the broker reports. The reason is the
+// text that explains why the wait ended.
+func addSettleWarning(diags *diag.Diagnostics, summary, reason string) {
 	diags.AddWarning(summary,
 		"The broker accepted the change, but the wait for the broker to report it ended early. "+
 			"Run terraform plan to refresh the state and show what the broker reports.\n\n"+
-			"Reason: "+err.Error())
+			"Reason: "+reason)
 }
 
 // addACLError reports err with advice matching its cause.

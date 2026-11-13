@@ -518,6 +518,15 @@ func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
 		assert.False(t, resp.State.Raw.IsNull(), "state is saved")
 	})
 
+	t.Run("create_warning_keeps_the_advice_for_a_refused_describe", func(t *testing.T) {
+		api := &fakeACLAPI{describeErr: kafkaclient.ErrNotAuthorized, timeout: time.Second}
+		resp := createACL(t, api, false)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		require.Equal(t, 1, resp.Diagnostics.WarningsCount())
+		assert.Contains(t, resp.Diagnostics.Warnings()[0].Detail(), "not authorized")
+	})
+
 	t.Run("create_fails_when_the_write_fails", func(t *testing.T) {
 		api := &fakeACLAPI{createErr: errors.New("write refused"), timeout: time.Second}
 		resp := createACL(t, api, false)

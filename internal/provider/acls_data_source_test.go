@@ -493,8 +493,8 @@ func waitForTopicACLs(t *testing.T, topic string, want int) {
 				return false
 			}
 			got := 0
-			for _, resource := range resp.Resources {
-				got += len(resource.ACLs)
+			for _, aclResource := range resp.Resources {
+				got += len(aclResource.ACLs)
 			}
 			return got == want
 		}, 30*time.Second, 100*time.Millisecond,

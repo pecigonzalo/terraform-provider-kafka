@@ -287,7 +287,7 @@ func (r *quotaResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 	if err := r.settle(ctx, entity, quotaExpectation{present: limits}); err != nil {
-		addQuotaSettleWarning(&resp.Diagnostics, "Quota created but not visible yet", err)
+		addSettleWarning(&resp.Diagnostics, "Quota created but not visible yet", quotaErrorMessage(err))
 	}
 }
 
@@ -381,7 +381,7 @@ func (r *quotaResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 	if err := r.settle(ctx, entity, exp); err != nil {
-		addQuotaSettleWarning(&resp.Diagnostics, "Quota change not visible yet", err)
+		addSettleWarning(&resp.Diagnostics, "Quota change not visible yet", quotaErrorMessage(err))
 	}
 }
 
@@ -419,7 +419,7 @@ func (r *quotaResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	// The broker accepted the removal. If the wait ends early, the result is a
 	// warning, so Terraform still removes the resource from state.
 	if err := r.settle(ctx, entity, exp); err != nil {
-		addQuotaSettleWarning(&resp.Diagnostics, "Quota removal not visible yet", err)
+		addSettleWarning(&resp.Diagnostics, "Quota removal not visible yet", quotaErrorMessage(err))
 	}
 }
 
@@ -562,17 +562,6 @@ func quotaErrorMessage(err error) string {
 			"Grant it DESCRIBE_CONFIGS and ALTER_CONFIGS on the cluster resource. Details: " + err.Error()
 	}
 	return err.Error()
-}
-
-// addQuotaSettleWarning reports a wait that ended before the broker showed a
-// change that it accepted. It is a warning for every cause, for example a
-// timeout or a refused describe: the change is done, and an error would taint
-// the resource. The next refresh shows what the broker reports.
-func addQuotaSettleWarning(diags *diag.Diagnostics, summary string, err error) {
-	diags.AddWarning(summary,
-		"The broker accepted the change, but the wait for the broker to report it ended early. "+
-			"Run terraform plan to refresh the state and show what the broker reports.\n\n"+
-			"Reason: "+quotaErrorMessage(err))
 }
 
 func addQuotaError(diags *diag.Diagnostics, summary string, err error) {

@@ -63,6 +63,9 @@ terraform {
   }
 }
 
+# This example is for local development only. It turns TLS and SASL off.
+# TLS and SASL are on by default. If you keep SASL on, you must set
+# `sasl.mechanism` (`plain`, `scram-sha256`, `scram-sha512` or `aws-msk-iam`).
 provider "kafka" {
   bootstrap_servers = ["localhost:9092"]
   tls  = { enabled = false }
@@ -80,9 +83,11 @@ resource "kafka_topic" "example" {
 ```
 
 The provider can also be configured with the `KAFKA_BOOTSTRAP_SERVERS`,
-`KAFKA_SASL_ENABLED`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`,
-`KAFKA_SASL_PASSWORD` and `KAFKA_TIMEOUT` environment variables. TLS and SASL are
-enabled by default. See the [documentation](docs/) for all options.
+`KAFKA_TLS_ENABLED`, `KAFKA_TLS_SKIP_VERIFY`, `KAFKA_SASL_ENABLED`,
+`KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` and
+`KAFKA_TIMEOUT` environment variables. TLS and SASL are enabled by default.
+There is no default SASL mechanism: you must set `sasl.mechanism` or
+`KAFKA_SASL_MECHANISM`. See the [documentation](docs/) for all options.
 
 ## Developing the Provider
 

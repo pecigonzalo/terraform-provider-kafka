@@ -11,6 +11,11 @@ BREAKING CHANGES:
 * provider: `bootstrap_servers` is now optional. If you do not set it, the provider uses `KAFKA_BOOTSTRAP_SERVERS`. This variable holds a comma-separated list. The default `localhost:9092` is removed. If you set neither, the provider gives an error. Set one of them. (#152)
 * provider: A bad value in `KAFKA_SASL_ENABLED` or `KAFKA_TIMEOUT` now gives an error. In v0.5.3, the provider ignored it. Correct the value. (#156)
 * provider: `timeout` must be 1 or more. In v0.5.3, the provider did not check it. If you set `timeout` to 0, use a larger value. (#154)
+* provider: There is no default SASL mechanism now. In earlier versions, the default was `aws-msk-iam`. SASL is still on by default, so you must set `sasl.mechanism` or `KAFKA_SASL_MECHANISM`. If you used the old default, set `mechanism = "aws-msk-iam"`. If you set no mechanism and SASL is on, the provider gives an error that lists the valid mechanisms. To turn SASL off, set `sasl = { enabled = false }`.
+* provider: With `aws-msk-iam`, a SASL user name or password is now an error. This includes `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD`. In earlier versions, the provider ignored these values without a message. This mechanism uses your AWS credentials. Remove the user name and the password.
+* provider: With `plain`, `scram-sha256` and `scram-sha512`, an empty SASL user name or password is now an error. The error names the missing value. It never shows the value.
+* provider: An empty `KAFKA_*` environment variable is now the same as an unset variable. In earlier versions, an empty `KAFKA_SASL_MECHANISM` gave an error.
+* provider: With `aws-msk-iam`, an empty AWS region is now an error. Set `AWS_REGION` or a region in the AWS configuration.
 * resource/`kafka_topic`: `partitions` and `replication_factor` must be 1 or more. `name` must have 1 to 249 characters. It can have only letters, digits, `.`, `_` and `-`. It cannot be `.` or `..`. Plan gives an error if a value is not valid. Correct the value. (#154, #158)
 * resource/`kafka_topic`: Plan now gives an error if you decrease `partitions`. Plan also gives an error if `replication_factor` is more than the number of brokers. In v0.5.3, these errors came during apply. (#159)
 * resource/`kafka_topic`: `configuration` is now optional only. The provider now tracks only the keys that you set. In v0.5.3, `configuration` was also computed, and state held all broker settings. Read the upgrade note below before you apply. (#154)
@@ -18,6 +23,12 @@ BREAKING CHANGES:
 UPGRADE NOTES:
 
 * resource/`kafka_topic`: Run `terraform plan` after you upgrade. Read the plan before you apply it. If you do not set `configuration`, the plan changes `configuration` to null. If you set some keys, the plan removes the other keys from state. When you apply, the provider sends only the keys that you set. Kafka then resets all other topic settings to the broker defaults. This includes settings that you or another tool set outside Terraform. To keep a setting, add it to `configuration` before you apply. (#154, #176)
+* provider: Before you upgrade, check your provider configuration:
+    * If SASL is on and you set no mechanism, set `mechanism`. If you used the old default, use `mechanism = "aws-msk-iam"`.
+    * If you use `aws-msk-iam`, remove `sasl.username`, `sasl.password`, `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD`.
+    * If you use `plain`, `scram-sha256` or `scram-sha512`, set a user name and a password.
+    * If you use `aws-msk-iam`, make sure that an AWS region is set.
+    * If you set `KAFKA_TIMEOUT` to 0 or less, use a value of 1 or more.
 
 FEATURES:
 
@@ -26,6 +37,9 @@ FEATURES:
 
 ENHANCEMENTS:
 
+* provider: The provider now shows a warning if the mechanism is `plain` and TLS is off. With this setup, the password goes over the network in clear text.
+* provider: The time to open one connection to a broker is now the smaller of `timeout` and 30 seconds. Before, it was `timeout`, which is 300 seconds by default. One broker that you cannot reach no longer stops an operation for five minutes. `timeout` still limits each request.
+* provider: New environment variables `KAFKA_TLS_ENABLED` and `KAFKA_TLS_SKIP_VERIFY`. A value in the configuration takes precedence. The documentation now lists all environment variables, and the risks of `tls.skip_verify`.
 * resource/`kafka_topic`: When you change `replication_factor`, apply now waits until Kafka finishes the change. If this takes longer than the provider `timeout`, the error tells you to run `terraform plan`. (#161)
 * resource/`kafka_topic`: When you change `partitions` or `replication_factor`, the provider reads the current topic state from the broker. In v0.5.3, it could use old Terraform state. (#153, #181)
 * resource/`kafka_topic`: When more than one topic fails to create, delete or change, the error now lists all of them. Before, it showed only the first. (#157)

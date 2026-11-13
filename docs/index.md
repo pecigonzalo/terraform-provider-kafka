@@ -36,20 +36,20 @@ provider "kafka" {
 
 ### Optional
 
-- `bootstrap_servers` (List of String) A list of Kafka brokers. Only the first entry is used to bootstrap the connection. Can also be set with the `KAFKA_BOOTSTRAP_SERVERS` environment variable (comma separated).
-- `sasl` (Attributes) SASL Authentication (see [below for nested schema](#nestedatt--sasl))
-- `timeout` (Number) Timeout for provider operations in seconds (default: 300)
-- `tls` (Attributes) TLS Configuration (see [below for nested schema](#nestedatt--tls))
+- `bootstrap_servers` (List of String) A list of Kafka brokers. Only the first entry is used to bootstrap the connection. If you do not set it, the provider uses the `KAFKA_BOOTSTRAP_SERVERS` environment variable (comma separated).
+- `sasl` (Attributes) SASL authentication. SASL is on by default. You must set `mechanism`. To turn SASL off, set `sasl = { enabled = false }`. (see [below for nested schema](#nestedatt--sasl))
+- `timeout` (Number) Timeout for provider operations in seconds (default: 300). It must be 1 or more. If you do not set it, the provider uses the `KAFKA_TIMEOUT` environment variable. The time to open one connection to a broker is the smaller of this value and 30 seconds.
+- `tls` (Attributes) TLS configuration. TLS is on by default. (see [below for nested schema](#nestedatt--tls))
 
 <a id="nestedatt--sasl"></a>
 ### Nested Schema for `sasl`
 
 Optional:
 
-- `enabled` (Boolean) Enable SASL Authentication
-- `mechanism` (String) SASL mechanism to use. One of plain, scram-sha256, scram-sha512, aws-msk-iam (default: aws-msk-iam)
-- `password` (String, Sensitive) Password for SASL authentication
-- `username` (String, Sensitive) Username for SASL authentication
+- `enabled` (Boolean) Enable SASL authentication (default: `true`). If you do not set it, the provider uses the `KAFKA_SASL_ENABLED` environment variable.
+- `mechanism` (String) SASL mechanism. One of `plain`, `scram-sha256`, `scram-sha512` or `aws-msk-iam`. The names `scram-sha-256` and `scram-sha-512` also work. There is no default. If SASL is on and you do not set it, the provider uses the `KAFKA_SASL_MECHANISM` environment variable. If that is also not set, the provider gives an error. With `plain`, the password goes over the network in clear text unless TLS is on.
+- `password` (String, Sensitive) Password for SASL authentication. Necessary for `plain`, `scram-sha256` and `scram-sha512`. If you do not set it, the provider uses the `KAFKA_SASL_PASSWORD` environment variable. Do not set it with `aws-msk-iam`: the provider gives an error.
+- `username` (String, Sensitive) User name for SASL authentication. Necessary for `plain`, `scram-sha256` and `scram-sha512`. If you do not set it, the provider uses the `KAFKA_SASL_USERNAME` environment variable. Do not set it with `aws-msk-iam`: the provider gives an error.
 
 
 <a id="nestedatt--tls"></a>
@@ -57,5 +57,5 @@ Optional:
 
 Optional:
 
-- `enabled` (Boolean) Enable TLS communication with Kafka brokers (default: true)
-- `skip_verify` (Boolean) Skips TLS verification when connecting to the brokers (default: false)
+- `enabled` (Boolean) Enable TLS communication with Kafka brokers (default: `true`). If you do not set it, the provider uses the `KAFKA_TLS_ENABLED` environment variable. Turn TLS off only for local development. Without TLS, all traffic goes over the network in clear text.
+- `skip_verify` (Boolean) Turn off the checks of the broker certificate and of the host name (default: `false`). If you do not set it, the provider uses the `KAFKA_TLS_SKIP_VERIFY` environment variable. If you turn the checks off, an attacker on the network can read or change the traffic. The attacker can also see the SASL credentials. If your brokers use a certificate from a private certificate authority, do not use this option. Install the certificate authority in the system certificate store instead. On Linux and other Unix systems (but not macOS), you can also set the `SSL_CERT_FILE` or `SSL_CERT_DIR` environment variable. These variables have no effect on macOS and Windows.

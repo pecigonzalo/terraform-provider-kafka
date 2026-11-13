@@ -34,6 +34,11 @@ const (
 	// timeout configured.
 	quotaDefaultTimeout = 5 * time.Minute
 
+	// quotaReadWindow bounds how long Read keeps describing a quota that does
+	// not match state or is missing. It must be long enough for minAbsentChecks
+	// describes, with the time each describe takes.
+	quotaReadWindow = 10 * time.Second
+
 	// minQuotaBrokerVersion is the first Kafka release with the quota APIs.
 	minQuotaBrokerVersion = "2.6"
 )
@@ -279,7 +284,7 @@ func (r *quotaResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 	if err := r.settle(ctx, entity, quotaExpectation{present: limits}); err != nil {
-		addQuotaWarning(&resp.Diagnostics, "Quota created but not visible yet", err)
+		addQuotaSettleDiagnostic(&resp.Diagnostics, "Quota created but not visible yet", err)
 	}
 }
 
@@ -305,7 +310,7 @@ func (r *quotaResource) Read(ctx context.Context, req resource.ReadRequest, resp
 	// Right after a write another broker can still answer from older state, so
 	// Read retries for a short while before treating a difference as drift or
 	// the quota as gone.
-	entry, err := r.observe(ctx, entity, quotaExpectation{present: tracked}, readSettleWindow)
+	entry, err := r.observe(ctx, entity, quotaExpectation{present: tracked}, quotaReadWindow)
 	if err != nil {
 		addQuotaError(&resp.Diagnostics, "Unable to read quota", err)
 		return
@@ -371,7 +376,7 @@ func (r *quotaResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 	if err := r.settle(ctx, entity, exp); err != nil {
-		addQuotaWarning(&resp.Diagnostics, "Quota change not visible yet", err)
+		addQuotaSettleDiagnostic(&resp.Diagnostics, "Quota change not visible yet", err)
 	}
 }
 
@@ -515,7 +520,7 @@ func (r *quotaResource) observe(ctx context.Context, entity kafkaclient.QuotaEnt
 	case absent > 0:
 		return nil, fmt.Errorf("quota not found, but the read window ended after %d check(s), so it is not treated as deleted", absent)
 	case last == nil:
-		return nil, fmt.Errorf("no answer from the broker within %s, so the quota is kept in state: %w", window, context.DeadlineExceeded)
+		return nil, fmt.Errorf("no answer from the broker within %s, so the quota is kept in state", window)
 	}
 	return last, nil
 }
@@ -553,10 +558,16 @@ func quotaErrorMessage(err error) string {
 	return err.Error()
 }
 
-// addQuotaWarning reports err as a warning. It is for a failed wait after the
-// broker accepted a change: the change is done, so the apply is not a failure.
-func addQuotaWarning(diags *diag.Diagnostics, summary string, err error) {
-	diags.AddWarning(summary, quotaErrorMessage(err))
+// addQuotaSettleDiagnostic reports a failed wait after the broker accepted a
+// change. A wait that ran out of time is a warning: the change is done and the
+// next refresh shows what the broker reports. Any other error is an error,
+// for example a refused describe, because it can need action from the user.
+func addQuotaSettleDiagnostic(diags *diag.Diagnostics, summary string, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		diags.AddWarning(summary, quotaErrorMessage(err))
+		return
+	}
+	addQuotaError(diags, summary, err)
 }
 
 func addQuotaError(diags *diag.Diagnostics, summary string, err error) {

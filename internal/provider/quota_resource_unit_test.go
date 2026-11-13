@@ -203,13 +203,16 @@ type fakeQuotaAPI struct {
 	// describeAfterAlter makes describe fail with err only after AlterQuotas
 	// was called, so a pre-check can pass.
 	describeAfterAlter bool
-	alters             int
+	// hangAfterAlter makes describe wait for its context only after
+	// AlterQuotas was called.
+	hangAfterAlter bool
+	alters         int
 }
 
 func (f *fakeQuotaAPI) DescribeQuotas(ctx context.Context, filter kafkaclient.QuotaFilter) ([]kafkaclient.QuotaEntry, error) {
 	f.filters = append(f.filters, filter)
 	f.calls++
-	if f.hang {
+	if f.hang || (f.hangAfterAlter && f.alters > 0) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
@@ -467,30 +470,51 @@ func TestQuotaReadResourceStates(t *testing.T) {
 
 func TestQuotaCreateSavesStateWhenWaitFails(t *testing.T) {
 	entity := quotaTestEntity()
-	// The pre-check describe sees no quota. After the alter, describe fails.
-	api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: errors.New("describe failed"), describeAfterAlter: true}
-	r := &quotaResource{client: api, timeout: time.Second, interval: time.Millisecond}
-	resp := &fwresource.CreateResponse{State: quotaTestState(t, r, nil)}
-	r.Create(t.Context(), fwresource.CreateRequest{Plan: quotaTestPlan(t, r, quotaTestModel(10))}, resp)
+	create := func(t *testing.T, api *fakeQuotaAPI) *fwresource.CreateResponse {
+		t.Helper()
+		r := &quotaResource{client: api, timeout: 20 * time.Millisecond, interval: time.Millisecond}
+		resp := &fwresource.CreateResponse{State: quotaTestState(t, r, nil)}
+		r.Create(t.Context(), fwresource.CreateRequest{Plan: quotaTestPlan(t, r, quotaTestModel(10))}, resp)
+		assert.Equal(t, 1, api.alters)
+		require.False(t, resp.State.Raw.IsNull(), "state is saved after the quota was created")
+		var id types.String
+		require.False(t, resp.State.GetAttribute(t.Context(), path.Root("id"), &id).HasError())
+		assert.Equal(t, encodeQuotaID(entity), id.ValueString())
+		assert.Equal(t, types.Float64Value(10), quotaProducerRate(t, resp.State))
+		return resp
+	}
 
-	assert.False(t, resp.Diagnostics.HasError(), "the quota was created, so the apply does not fail")
-	assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
-	assert.Equal(t, 1, api.alters)
-	require.False(t, resp.State.Raw.IsNull(), "state is saved after the quota was created")
-	var id types.String
-	require.False(t, resp.State.GetAttribute(t.Context(), path.Root("id"), &id).HasError())
-	assert.Equal(t, encodeQuotaID(entity), id.ValueString())
-	assert.Equal(t, types.Float64Value(10), quotaProducerRate(t, resp.State))
+	t.Run("timeout_is_a_warning", func(t *testing.T) {
+		resp := create(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, hangAfterAlter: true})
+		assert.False(t, resp.Diagnostics.HasError(), "the quota was created, so the apply does not fail")
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	})
+
+	t.Run("describe_error_is_an_error_and_state_is_kept", func(t *testing.T) {
+		resp := create(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: kafkaclient.ErrQuotaAuthorizationFailed, describeAfterAlter: true})
+		assert.True(t, resp.Diagnostics.HasError())
+	})
 }
 
 func TestQuotaUpdateSavesNewValuesWhenWaitFails(t *testing.T) {
-	api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: errors.New("describe failed"), describeAfterAlter: false}
-	r := &quotaResource{client: api, timeout: time.Second, interval: time.Millisecond}
-	state := quotaTestState(t, r, quotaTestModel(10))
-	resp := &fwresource.UpdateResponse{State: state}
-	r.Update(t.Context(), fwresource.UpdateRequest{Plan: quotaTestPlan(t, r, quotaTestModel(20)), State: state}, resp)
+	update := func(t *testing.T, api *fakeQuotaAPI) *fwresource.UpdateResponse {
+		t.Helper()
+		r := &quotaResource{client: api, timeout: 20 * time.Millisecond, interval: time.Millisecond}
+		state := quotaTestState(t, r, quotaTestModel(10))
+		resp := &fwresource.UpdateResponse{State: state}
+		r.Update(t.Context(), fwresource.UpdateRequest{Plan: quotaTestPlan(t, r, quotaTestModel(20)), State: state}, resp)
+		assert.Equal(t, types.Float64Value(20), quotaProducerRate(t, resp.State), "state holds the accepted values")
+		return resp
+	}
 
-	assert.False(t, resp.Diagnostics.HasError(), "the change was accepted, so the apply does not fail")
-	assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
-	assert.Equal(t, types.Float64Value(20), quotaProducerRate(t, resp.State), "state holds the accepted values")
+	t.Run("timeout_is_a_warning", func(t *testing.T) {
+		resp := update(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, hang: true})
+		assert.False(t, resp.Diagnostics.HasError(), "the change was accepted, so the apply does not fail")
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	})
+
+	t.Run("describe_error_is_an_error_and_state_is_kept", func(t *testing.T) {
+		resp := update(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: errors.New("describe failed")})
+		assert.True(t, resp.Diagnostics.HasError())
+	})
 }

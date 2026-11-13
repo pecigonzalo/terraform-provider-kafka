@@ -33,8 +33,9 @@ const (
 	aclDefaultTimeout = 5 * time.Minute
 
 	// aclReadSettleWindow bounds how long Read keeps re-describing an ACL that
-	// is missing before it is reported as gone.
-	aclReadSettleWindow = 3 * time.Second
+	// is missing before it is reported as gone. It must be long enough for
+	// minAbsentChecks describes, with the time each describe takes.
+	aclReadSettleWindow = 10 * time.Second
 
 	// aclIDSeparator separates the fields of an ACL id. It is escaped inside
 	// field values, see escapeACLIDField.
@@ -399,8 +400,8 @@ func (r *aclResource) readACL(ctx context.Context, acl kafkaclient.ACL) error {
 	case err == nil:
 		return errACLGone
 	case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
-		return fmt.Errorf("ACL not found in %d finished check(s) before the read window ended, so it is not treated as deleted: %w",
-			absent, errACLNotSettled)
+		return fmt.Errorf("ACL not found in %d finished check(s) before the read window ended, so it is not treated as deleted",
+			absent)
 	default:
 		return err
 	}

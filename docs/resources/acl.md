@@ -44,13 +44,13 @@ resource "kafka_acl" "orders_consumers" {
 
 - `operation` (String) Operation the ACL allows or denies: `all`, `read`, `write`, `create`, `delete`, `alter`, `describe`, `cluster_action`, `describe_configs`, `alter_configs`, `idempotent_write`. Which operations are valid depends on `resource_type`.
 - `permission_type` (String) Whether the ACL allows or denies the operation: `allow` or `deny`.
-- `principal` (String) Principal the ACL applies to, as `Type:name`, for example `User:alice`. `User:*` matches every user.
+- `principal` (String) Principal the ACL applies to, as `Type:name`, for example `User:alice`. `User:*` matches every user. Write the type `User` with this exact case, because Kafka compares the type with exact case. Other types are valid, because Kafka allows custom principal types.
 - `resource_name` (String) Name of the resource, for example a topic name or consumer group id. Use `*` with a `literal` pattern to match every resource of the type, and `kafka-cluster` for the `cluster` resource type.
 - `resource_type` (String) Type of resource the ACL applies to: `topic`, `group`, `cluster`, `transactional_id`, `delegation_token`.
 
 ### Optional
 
-- `host` (String) Host the principal is allowed or denied access from. `*` (the default) matches every host.
+- `host` (String) Host the principal is allowed or denied access from. Use `*` (the default) for every host, or one IP address (IPv4 or IPv6). Kafka matches hosts exactly. It does not support network ranges, such as `10.0.0.0/8`, or host names.
 - `resource_pattern_type` (String) How `resource_name` is matched: `literal` (exact name) or `prefixed` (names starting with `resource_name`). Defaults to `literal`.
 
 ### Read-Only

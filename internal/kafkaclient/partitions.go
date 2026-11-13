@@ -169,14 +169,16 @@ func (c *Client) AlterPartitionReassignments(ctx context.Context, topic string, 
 	if err != nil {
 		return fmt.Errorf("alter partition reassignments of topic %q: %w", topic, err)
 	}
-	if resp.Error != nil {
-		return fmt.Errorf("alter partition reassignments of topic %q: %w", topic, classifyBrokerError(resp.Error))
-	}
 	results := make(map[string]error, len(resp.PartitionResults))
 	for _, pr := range resp.PartitionResults {
 		results[strconv.Itoa(pr.PartitionID)] = pr.Error
 	}
-	if err := checkResults("partition", nil, results); err != nil {
+	var errs []error
+	if resp.Error != nil {
+		errs = append(errs, classifyBrokerError(resp.Error))
+	}
+	errs = append(errs, checkResults("partition", nil, results))
+	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("alter partition reassignments of topic %q: %w", topic, err)
 	}
 	return nil

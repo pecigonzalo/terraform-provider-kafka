@@ -194,6 +194,25 @@ func TestAlterPartitionReassignments_responseErrors(t *testing.T) {
 	}
 }
 
+func TestAlterPartitionReassignments_reportsTopLevelAndPartitionErrors(t *testing.T) {
+	resp := &alterpartitionreassignments.Response{
+		ErrorCode: int16(kafka.RequestTimedOut),
+		Results: []alterpartitionreassignments.ResponseResult{{
+			Name: "t",
+			Partitions: []alterpartitionreassignments.ResponsePartition{
+				{PartitionIndex: 1, ErrorCode: int16(kafka.InvalidReplicaAssignment)},
+			},
+		}},
+	}
+	rt := &partitionsFakeTransport{alter: resp}
+
+	err := newPartitionsClient(t, time.Second, rt).AlterPartitionReassignments(t.Context(), "t",
+		[]PartitionAssignment{{Partition: 1, Replicas: []int{1}}})
+
+	require.ErrorIs(t, err, kafka.RequestTimedOut)
+	assert.ErrorIs(t, err, ErrInvalidReplicaAssignment)
+}
+
 func TestAlterPartitionReassignments_transportErrorAndValidation(t *testing.T) {
 	boom := errors.New("connection reset")
 	c := newPartitionsClient(t, time.Second, &partitionsFakeTransport{err: boom})

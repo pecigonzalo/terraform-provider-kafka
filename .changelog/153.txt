@@ -1,0 +1,15 @@
+```release-note:enhancement
+resource/`kafka_topic`: When you change `partitions` or `replication_factor`, the provider reads the current topic state from the broker. In v0.5.3, it could use old Terraform state. (#153, #181)
+```
+
+```release-note:bug
+resource/`kafka_topic`: The provider now shows an error when a change to the replicas of a topic fails. In v0.5.3, it ignored the error. (#153)
+```
+
+```release-note:bug
+resource/`kafka_topic`: Delete no longer stops with a panic. Delete succeeds if the topic is already gone. (#153)
+```
+
+```release-note:bug
+resource/`kafka_topic`: The provider now converts `configuration` values with typed entries. Before, it removed quotes from the text of the value. The provider skips null and unknown values. (#153)
+```

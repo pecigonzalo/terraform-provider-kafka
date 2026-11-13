@@ -1,0 +1,3 @@
+```release-note:note
+The provider now uses a client based on `kafka-go`. It no longer uses `topicctl`. This is an internal change. The changes below come from it. (#167, #169, #170, #171, #173, #174, #176, #180, #181)
+```

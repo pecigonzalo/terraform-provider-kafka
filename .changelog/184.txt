@@ -1,0 +1,3 @@
+```release-note:new-data-source
+`kafka_acls` lists the ACL entries that match the filters. The filters are `resource_type`, `resource_name`, `resource_pattern_type`, `principal`, `host`, `operation` and `permission_type`. A filter that you do not set matches all values. The `host` and `principal` filters follow the same rules as in `kafka_acl`. The result is the list `acls`. It is sorted by `id`. Each entry has the attributes and the `id` of `kafka_acl`. (#184)
+```

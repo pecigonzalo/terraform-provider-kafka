@@ -1,0 +1,15 @@
+```release-note:breaking-change
+provider: `timeout` must be 1 or more. In v0.5.3, the provider did not check it. If you set `timeout` to 0, use a larger value. (#154)
+```
+
+```release-note:breaking-change
+resource/`kafka_topic`: `partitions` and `replication_factor` must be 1 or more. `name` must have 1 to 249 characters. It can have only letters, digits, `.`, `_` and `-`. It cannot be `.` or `..`. Plan gives an error if a value is not valid. Correct the value. (#154, #158)
+```
+
+```release-note:breaking-change
+resource/`kafka_topic`: `configuration` is now optional only. The provider now tracks only the keys that you set. In v0.5.3, `configuration` was also computed, and state held all broker settings. Read the upgrade note below before you apply. (#154)
+```
+
+```release-note:upgrade-note
+resource/`kafka_topic`: Run `terraform plan` after you upgrade. Read the plan before you apply it. If you do not set `configuration`, the plan changes `configuration` to null. If you set some keys, the plan removes the other keys from state. When you change `configuration`, the provider now sets the keys that you manage and deletes the keys that you removed. It does not change any other setting. In v0.5.3, state held all broker settings. For this reason, the first change after the upgrade deletes every key that was in the old state and is not in your `configuration`. For a key at the broker default, this changes nothing. A setting that is not at the default and was in the old state returns to the broker default. To keep such a setting, add it to `configuration` before you apply. Settings that you or another tool set after the upgrade are not changed. (#154, #176, #194)
+```

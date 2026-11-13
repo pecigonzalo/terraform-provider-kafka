@@ -1,0 +1,40 @@
+```release-note:breaking-change
+provider: There is no default SASL mechanism now. In earlier versions, the default was `aws-msk-iam`. SASL is still on by default, so you must set `sasl.mechanism` or `KAFKA_SASL_MECHANISM`. If you used the old default, set `mechanism = "aws-msk-iam"`. If you set no mechanism and SASL is on, the provider gives an error that lists the valid mechanisms. To turn SASL off, set `sasl = { enabled = false }`. (#186)
+```
+
+```release-note:breaking-change
+provider: With `aws-msk-iam`, a SASL user name or password is now an error. This includes `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD`. In earlier versions, the provider ignored these values without a message. This mechanism uses your AWS credentials. Remove the user name and the password. (#186)
+```
+
+```release-note:breaking-change
+provider: With `plain`, `scram-sha256` and `scram-sha512`, an empty SASL user name or password is now an error. The error names the missing value. It never shows the value. (#186)
+```
+
+```release-note:breaking-change
+provider: An empty `KAFKA_*` environment variable is now the same as an unset variable. In earlier versions, an empty `KAFKA_SASL_MECHANISM` gave an error. (#186)
+```
+
+```release-note:breaking-change
+provider: With `aws-msk-iam`, an empty AWS region is now an error. Set `AWS_REGION` or a region in the AWS configuration. (#186)
+```
+
+```release-note:upgrade-note
+provider: Before you upgrade, check your provider configuration: (#186)
+    * If SASL is on and you set no mechanism, set `mechanism`. If you used the old default, use `mechanism = "aws-msk-iam"`.
+    * If you use `aws-msk-iam`, remove `sasl.username`, `sasl.password`, `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD`.
+    * If you use `plain`, `scram-sha256` or `scram-sha512`, set a user name and a password.
+    * If you use `aws-msk-iam`, make sure that an AWS region is set.
+    * If you set `KAFKA_TIMEOUT` to 0 or less, use a value of 1 or more.
+```
+
+```release-note:enhancement
+provider: The provider now shows a warning if the mechanism is `plain` and TLS is off. With this setup, the password goes over the network in clear text. (#186)
+```
+
+```release-note:enhancement
+provider: The time to open one connection to a broker is now the smaller of `timeout` and 30 seconds. Before, it was `timeout`, which is 300 seconds by default. One broker that you cannot reach no longer stops an operation for five minutes. `timeout` still limits each request. (#186)
+```
+
+```release-note:enhancement
+provider: New environment variables `KAFKA_TLS_ENABLED` and `KAFKA_TLS_SKIP_VERIFY`. A value in the configuration takes precedence. The documentation now lists all environment variables, and the risks of `tls.skip_verify`. (#186)
+```

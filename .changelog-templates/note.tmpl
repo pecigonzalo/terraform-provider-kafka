@@ -1,0 +1,4 @@
+{{- /* The text of an entry holds its own PR marker, so this template adds none. */ -}}
+{{- define "note" -}}
+{{if eq "new-resource" .Type}}**New Resource:** {{else if eq "new-data-source" .Type}}**New Data Source:** {{end}}{{.Body}}
+{{- end -}}

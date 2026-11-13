@@ -119,13 +119,15 @@ func TestTopicDataSourceConfigure(t *testing.T) {
 func TestTopicResourceConfigure(t *testing.T) {
 	t.Run("accepts_resource_clients", func(t *testing.T) {
 		topicctlClient := &admin.BrokerAdminClient{}
+		kafkaClient := &kafkaclient.Client{}
 		r := &topicResource{}
 		resp := &resource.ConfigureResponse{}
 		r.Configure(t.Context(), resource.ConfigureRequest{
-			ProviderData: &resourceClients{kafka: &kafkaclient.Client{}, topicctl: topicctlClient},
+			ProviderData: &resourceClients{kafka: kafkaClient, topicctl: topicctlClient},
 		}, resp)
 		assert.False(t, resp.Diagnostics.HasError())
-		assert.Same(t, topicctlClient, r.client)
+		assert.Same(t, kafkaClient, r.kafka)
+		assert.Same(t, topicctlClient, r.topicctl)
 	})
 
 	t.Run("rejects_topicctl_client", func(t *testing.T) {
@@ -133,7 +135,8 @@ func TestTopicResourceConfigure(t *testing.T) {
 		resp := &resource.ConfigureResponse{}
 		r.Configure(t.Context(), resource.ConfigureRequest{ProviderData: &admin.BrokerAdminClient{}}, resp)
 		assert.True(t, resp.Diagnostics.HasError())
-		assert.Nil(t, r.client)
+		assert.Nil(t, r.kafka)
+		assert.Nil(t, r.topicctl)
 	})
 
 	t.Run("rejects_read_only_client", func(t *testing.T) {
@@ -141,7 +144,8 @@ func TestTopicResourceConfigure(t *testing.T) {
 		resp := &resource.ConfigureResponse{}
 		r.Configure(t.Context(), resource.ConfigureRequest{ProviderData: &kafkaclient.ReadOnlyClient{}}, resp)
 		assert.True(t, resp.Diagnostics.HasError())
-		assert.Nil(t, r.client)
+		assert.Nil(t, r.kafka)
+		assert.Nil(t, r.topicctl)
 	})
 
 	t.Run("nil_provider_data_is_ignored", func(t *testing.T) {
@@ -149,6 +153,7 @@ func TestTopicResourceConfigure(t *testing.T) {
 		resp := &resource.ConfigureResponse{}
 		r.Configure(t.Context(), resource.ConfigureRequest{}, resp)
 		assert.False(t, resp.Diagnostics.HasError())
-		assert.Nil(t, r.client)
+		assert.Nil(t, r.kafka)
+		assert.Nil(t, r.topicctl)
 	})
 }

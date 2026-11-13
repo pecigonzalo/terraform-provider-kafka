@@ -23,11 +23,14 @@ type fakeQuotaRoundTripper struct {
 	alter     *alterclientquotas.Response
 	describes []*describeclientquotas.Request
 	alters    []*alterclientquotas.Request
+
+	apiVersionRequests int
 }
 
 func (f *fakeQuotaRoundTripper) RoundTrip(_ context.Context, _ net.Addr, req kafka.Request) (kafka.Response, error) {
 	switch r := req.(type) {
 	case *apiversions.Request:
+		f.apiVersionRequests++
 		if f.apiErr != nil {
 			return nil, f.apiErr
 		}
@@ -91,7 +94,7 @@ func TestFilterComponents(t *testing.T) {
 		AnyOf: []QuotaEntityType{QuotaEntityIP},
 	}
 	require.NoError(t, f.validate())
-	assert.Equal(t, []kafka.DescribeClientQuotasRequestComponent{
+	assert.Equal(t, []describeclientquotas.Component{
 		{EntityType: "client-id", MatchType: matchDefault},
 		{EntityType: "user", MatchType: matchExact, Match: "alice"},
 		{EntityType: "ip", MatchType: matchAny},
@@ -253,7 +256,7 @@ func TestAlterQuotas_Errors(t *testing.T) {
 	}
 }
 
-func TestCheckQuotaSupport(t *testing.T) {
+func TestRequireAPIs(t *testing.T) {
 	tests := []struct {
 		name    string
 		apiKeys []int16
@@ -269,7 +272,7 @@ func TestCheckQuotaSupport(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rt := &fakeQuotaRoundTripper{apiKeys: tc.apiKeys, apiErr: tc.apiErr}
-			err := newQuotaClient(t, rt).CheckQuotaSupport(t.Context())
+			err := newQuotaClient(t, rt).requireAPIs(t.Context(), apiKeyDescribeClientQuotas, apiKeyAlterClientQuotas)
 			switch {
 			case tc.wantIs != nil:
 				require.ErrorIs(t, err, tc.wantIs)
@@ -281,4 +284,64 @@ func TestCheckQuotaSupport(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQuotaSupportCheck_RunsOnceForManyCalls(t *testing.T) {
+	rt := &fakeQuotaRoundTripper{
+		apiKeys:  quotaAPIs(),
+		describe: &describeclientquotas.Response{},
+		alter:    &alterclientquotas.Response{},
+	}
+	c := newQuotaClient(t, rt)
+	entity := QuotaEntity{QuotaEntityUser: NamedQuotaEntity("alice")}
+
+	for range 3 {
+		_, err := c.DescribeQuotas(t.Context(), QuotaFilter{})
+		require.NoError(t, err)
+		require.NoError(t, c.AlterQuotas(t.Context(), entity, QuotaValues{QuotaProducerByteRate: 1}, nil))
+	}
+
+	assert.Equal(t, 1, rt.apiVersionRequests, "one check covers both operations")
+	assert.Len(t, rt.describes, 3)
+	assert.Len(t, rt.alters, 3)
+}
+
+func TestQuotaSupportCheck_NegativeResultIsNotKept(t *testing.T) {
+	rt := &fakeQuotaRoundTripper{apiKeys: []int16{18}, describe: &describeclientquotas.Response{}}
+	c := newQuotaClient(t, rt)
+
+	_, err := c.DescribeQuotas(t.Context(), QuotaFilter{})
+	require.ErrorIs(t, err, ErrQuotasUnsupported)
+
+	rt.apiKeys = quotaAPIs()
+	_, err = c.DescribeQuotas(t.Context(), QuotaFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rt.apiVersionRequests)
+}
+
+func TestQuotaOperations_UnsupportedVersionFromRequest(t *testing.T) {
+	rt := &fakeQuotaRoundTripper{
+		apiKeys:  quotaAPIs(),
+		describe: &describeclientquotas.Response{},
+		alter:    &alterclientquotas.Response{},
+	}
+	c := newQuotaClient(t, rt)
+	entity := QuotaEntity{QuotaEntityUser: NamedQuotaEntity("alice")}
+
+	// The first calls pass the check. A later request reaches a broker that
+	// lacks the API, so the check is skipped and the request itself fails.
+	_, err := c.DescribeQuotas(t.Context(), QuotaFilter{})
+	require.NoError(t, err)
+	require.NoError(t, c.AlterQuotas(t.Context(), entity, QuotaValues{QuotaProducerByteRate: 1}, nil))
+
+	rt.describe = &describeclientquotas.Response{ErrorCode: int16(kafka.UnsupportedVersion)}
+	_, err = c.DescribeQuotas(t.Context(), QuotaFilter{})
+	require.ErrorIs(t, err, ErrQuotasUnsupported)
+
+	rt.alter = &alterclientquotas.Response{Results: []alterclientquotas.ResponseQuotas{
+		{ErrorCode: int16(kafka.UnsupportedVersion)}}}
+	err = c.AlterQuotas(t.Context(), entity, QuotaValues{QuotaProducerByteRate: 1}, nil)
+	require.ErrorIs(t, err, ErrQuotasUnsupported)
+
+	assert.Equal(t, 1, rt.apiVersionRequests)
 }

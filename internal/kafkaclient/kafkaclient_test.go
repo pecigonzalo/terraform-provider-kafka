@@ -162,10 +162,9 @@ func TestNewTransport_TLS(t *testing.T) {
 	}
 }
 
-func TestNewTransport_Timeout(t *testing.T) {
-	transport, err := newTransport(t.Context(), Config{BootstrapServer: "b:9092", Timeout: 7 * time.Second, DialTimeout: 7 * time.Second}, fakeAWSLoader)
+func TestNewTransport_ClientID(t *testing.T) {
+	transport, err := newTransport(t.Context(), Config{BootstrapServer: "b:9092"}, fakeAWSLoader)
 	require.NoError(t, err)
-	assert.Equal(t, 7*time.Second, transport.DialTimeout)
 	assert.Equal(t, clientID, transport.ClientID)
 }
 
@@ -263,7 +262,7 @@ func TestReadOnlyViewReadsThroughSameClient(t *testing.T) {
 	c.kc.Transport = rt
 
 	ro := c.ReadOnly()
-	resp, err := ro.Metadata(t.Context())
+	resp, err := ro.metadata(t.Context())
 	require.NoError(t, err)
 	require.Len(t, resp.Brokers, 1)
 	assert.Equal(t, 1, resp.Brokers[0].ID)
@@ -302,10 +301,7 @@ func TestNewTransport_MetadataTTL(t *testing.T) {
 
 func TestReaderTimeout(t *testing.T) {
 	c, err := New(t.Context(), Config{BootstrapServer: "localhost:9092", Timeout: 7 * time.Second})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := c.Timeout(); got != 7*time.Second {
-		t.Errorf("Timeout() = %v, want 7s", got)
-	}
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	assert.Equal(t, 7*time.Second, c.Timeout())
 }

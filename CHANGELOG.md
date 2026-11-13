@@ -16,6 +16,7 @@ BREAKING CHANGES:
 * provider: With `plain`, `scram-sha256` and `scram-sha512`, an empty SASL user name or password is now an error. The error names the missing value. It never shows the value. (#186)
 * provider: An empty `KAFKA_*` environment variable is now the same as an unset variable. In earlier versions, an empty `KAFKA_SASL_MECHANISM` gave an error. (#186)
 * provider: With `aws-msk-iam`, an empty AWS region is now an error. Set `AWS_REGION` or a region in the AWS configuration. (#186)
+* resource/`kafka_acl`, data source `kafka_acls`: `host` must be `*` or one IP address. Kafka matches hosts exactly. It does not support network ranges (such as `10.0.0.0/8`), partial wildcards or host names. An ACL with such a host never matches a client, so a deny ACL did nothing. Plan now gives an error. If you use a range or a host name, replace it with one ACL for each IP address. The principal type `User` must have this exact case. A value such as `user:alice` gives an error. Write `User:alice`. (#184)
 * resource/`kafka_topic`: `partitions` and `replication_factor` must be 1 or more. `name` must have 1 to 249 characters. It can have only letters, digits, `.`, `_` and `-`. It cannot be `.` or `..`. Plan gives an error if a value is not valid. Correct the value. (#154, #158)
 * resource/`kafka_topic`: Plan now gives an error if you decrease `partitions`. Plan also gives an error if `replication_factor` is more than the number of brokers. In v0.5.3, these errors came during apply. (#159)
 * resource/`kafka_topic`: `configuration` is now optional only. The provider now tracks only the keys that you set. In v0.5.3, `configuration` was also computed, and state held all broker settings. Read the upgrade note below before you apply. (#154)
@@ -34,12 +35,14 @@ FEATURES:
 
 * **New Resource:** `kafka_acl` manages one ACL entry. Kafka cannot change an ACL, so a change to any attribute replaces the entry. To import, use the id `resource_type|resource_name|resource_pattern_type|principal|host|operation|permission_type`, for example `topic|orders|literal|User:alice|*|read|allow`. In a value, write `%` as `%25` and `|` as `%7C`. (#177)
 * **New Resource:** `kafka_quota` manages the quotas of one `user`, `client_id` or `ip` entity. An entity can be the default entity. The limits are `producer_byte_rate`, `consumer_byte_rate`, `request_percentage`, `controller_mutation_rate` and `connection_creation_rate`. Kafka 2.6 or later is necessary. To import, use an id such as `user=alice,client-id=billing`, `ip=10.0.0.1` or `user=<default>`. (#178)
+* **New Data Source:** `kafka_acls` lists the ACL entries that match the filters. The filters are `resource_type`, `resource_name`, `resource_pattern_type`, `principal`, `host`, `operation` and `permission_type`. A filter that you do not set matches all values. The result is the list `acls`. It is sorted by `id`. Each entry has the attributes and the `id` of `kafka_acl`. (#184)
 
 ENHANCEMENTS:
 
 * provider: The provider now shows a warning if the mechanism is `plain` and TLS is off. With this setup, the password goes over the network in clear text. (#186)
 * provider: The time to open one connection to a broker is now the smaller of `timeout` and 30 seconds. Before, it was `timeout`, which is 300 seconds by default. One broker that you cannot reach no longer stops an operation for five minutes. `timeout` still limits each request. (#186)
 * provider: New environment variables `KAFKA_TLS_ENABLED` and `KAFKA_TLS_SKIP_VERIFY`. A value in the configuration takes precedence. The documentation now lists all environment variables, and the risks of `tls.skip_verify`. (#186)
+* resource/`kafka_acl`: Create and delete now wait for as long as the provider `timeout` allows, until the broker shows the change. If this takes longer, the error tells you to run `terraform apply` again. (#184)
 * resource/`kafka_topic`: When you change `replication_factor`, apply now waits until Kafka finishes the change. If this takes longer than the provider `timeout`, the error tells you to run `terraform plan`. (#161)
 * resource/`kafka_topic`: When you change `partitions` or `replication_factor`, the provider reads the current topic state from the broker. In v0.5.3, it could use old Terraform state. (#153, #181)
 * resource/`kafka_topic`: When more than one topic fails to create, delete or change, the error now lists all of them. Before, it showed only the first. (#157)

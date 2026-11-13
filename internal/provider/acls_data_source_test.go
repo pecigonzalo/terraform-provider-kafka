@@ -69,7 +69,6 @@ func aclsConfigValue(t *testing.T, set map[string]*string) tftypes.Value {
 }
 
 //go:fix inline
-func strPtr(s string) *string { return new(s) }
 
 func TestACLsDataSourceValidateConfig(t *testing.T) {
 	tests := []struct {

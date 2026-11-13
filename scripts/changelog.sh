@@ -64,19 +64,29 @@ release() {
   fi
   local tmp
   tmp="$(mktemp)"
+  # shellcheck disable=SC2064 # Expand now: "tmp" is local and does not exist when the trap runs.
+  trap "rm -f '${tmp}'" EXIT
   {
     # Keep the title and the text before the first version section.
     awk '/^## /{exit} {print}' CHANGELOG.md
     printf '## %s (%s)\n\n%s\n\n' "${version}" "$(date +%Y-%m-%d)" "${body}"
     awk 'f{print} /^## /&&!f{f=1; print}' CHANGELOG.md
   } >"${tmp}"
-  mv "${tmp}" CHANGELOG.md
+  # Write into the existing file, so that it keeps its permissions.
+  cat "${tmp}" >CHANGELOG.md
+  rm -f "${tmp}"
 }
 
 check() {
   local status=0 file name
-  shopt -s nullglob
-  for file in "${ENTRIES_DIR}"/*.txt; do
+  shopt -s nullglob dotglob
+  local files=("${ENTRIES_DIR}"/*)
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "error: ${ENTRIES_DIR}/ has no entry files." >&2
+    return 1
+  fi
+  # The build reads every file in the directory, so check all of them.
+  for file in "${files[@]}"; do
     name="$(basename "${file}")"
     if [[ ! "${name}" =~ ^[0-9]+(,\ #[0-9]+)*\.txt$ ]]; then
       echo "${file}: the file name must be a PR number, such as 154.txt, or a list, such as '154, #158.txt'." >&2

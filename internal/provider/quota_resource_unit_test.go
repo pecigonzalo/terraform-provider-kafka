@@ -7,7 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	fwschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -191,19 +196,31 @@ type fakeQuotaAPI struct {
 	err       error
 	calls     int
 	filters   []kafkaclient.QuotaFilter
+
+	// hang makes every describe wait until its context ends, like a broker
+	// that does not answer.
+	hang bool
+	// describeAfterAlter makes describe fail with err only after AlterQuotas
+	// was called, so a pre-check can pass.
+	describeAfterAlter bool
+	alters             int
 }
 
-func (f *fakeQuotaAPI) DescribeQuotas(_ context.Context, filter kafkaclient.QuotaFilter) ([]kafkaclient.QuotaEntry, error) {
+func (f *fakeQuotaAPI) DescribeQuotas(ctx context.Context, filter kafkaclient.QuotaFilter) ([]kafkaclient.QuotaEntry, error) {
 	f.filters = append(f.filters, filter)
-	i := min(f.calls, len(f.responses)-1)
 	f.calls++
-	if f.err != nil {
+	if f.hang {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if f.err != nil && (!f.describeAfterAlter || f.alters > 0) {
 		return nil, f.err
 	}
-	return f.responses[i], nil
+	return f.responses[min(f.calls-1, len(f.responses)-1)], nil
 }
 
 func (f *fakeQuotaAPI) AlterQuotas(context.Context, kafkaclient.QuotaEntity, kafkaclient.QuotaValues, []string) error {
+	f.alters++
 	return nil
 }
 
@@ -325,4 +342,155 @@ func TestQuotaErrorMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+// quotaTestEntity is the entity used by the resource-level tests below.
+func quotaTestEntity() kafkaclient.QuotaEntity {
+	return kafkaclient.QuotaEntity{"user": named("alice")}
+}
+
+// quotaTestModel returns a model for the test entity with a producer limit.
+func quotaTestModel(producer float64) *quotaResourceModel {
+	m := &quotaResourceModel{ID: types.StringValue(encodeQuotaID(quotaTestEntity()))}
+	m.setEntity(quotaTestEntity())
+	m.setLimits(kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: producer})
+	return m
+}
+
+func quotaTestSchema(t *testing.T, r *quotaResource) fwschema.Schema {
+	t.Helper()
+	resp := &fwresource.SchemaResponse{}
+	r.Schema(t.Context(), fwresource.SchemaRequest{}, resp)
+	return resp.Schema
+}
+
+// quotaTestState returns a state that holds model, or an empty state if model is nil.
+func quotaTestState(t *testing.T, r *quotaResource, model *quotaResourceModel) tfsdk.State {
+	t.Helper()
+	sch := quotaTestSchema(t, r)
+	state := tfsdk.State{Schema: sch, Raw: tftypes.NewValue(sch.Type().TerraformType(t.Context()), nil)}
+	if model != nil {
+		require.False(t, state.Set(t.Context(), model).HasError())
+	}
+	return state
+}
+
+func quotaTestPlan(t *testing.T, r *quotaResource, model *quotaResourceModel) tfsdk.Plan {
+	t.Helper()
+	sch := quotaTestSchema(t, r)
+	plan := tfsdk.Plan{Schema: sch, Raw: tftypes.NewValue(sch.Type().TerraformType(t.Context()), nil)}
+	require.False(t, plan.Set(t.Context(), model).HasError())
+	return plan
+}
+
+func quotaProducerRate(t *testing.T, state tfsdk.State) types.Float64 {
+	t.Helper()
+	var got types.Float64
+	require.False(t, state.GetAttribute(t.Context(), path.Root("producer_byte_rate"), &got).HasError())
+	return got
+}
+
+func TestQuotaObserveGoneAndAbsent(t *testing.T) {
+	entity := quotaTestEntity()
+	want := quotaExpectation{present: kafkaclient.QuotaValues{"producer_byte_rate": 10}}
+	present := quotaEntries(entity, kafkaclient.QuotaValues{"producer_byte_rate": 10})
+
+	t.Run("absent_a_few_times_then_present_is_kept", func(t *testing.T) {
+		responses := make([][]kafkaclient.QuotaEntry, 0, minAbsentChecks)
+		for range minAbsentChecks - 1 {
+			responses = append(responses, nil)
+		}
+		responses = append(responses, present)
+		r := &quotaResource{client: &fakeQuotaAPI{responses: responses}, interval: time.Millisecond}
+		entry, err := r.observe(t.Context(), entity, want, 5*time.Second)
+		require.NoError(t, err)
+		require.NotNil(t, entry)
+	})
+
+	t.Run("absent_every_time_is_gone_after_the_required_checks", func(t *testing.T) {
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}}
+		r := &quotaResource{client: api, interval: time.Millisecond}
+		entry, err := r.observe(t.Context(), entity, want, 5*time.Second)
+		require.NoError(t, err)
+		assert.Nil(t, entry)
+		assert.Equal(t, minAbsentChecks, api.calls)
+	})
+
+	t.Run("window_ends_before_enough_absent_checks_keeps_the_quota", func(t *testing.T) {
+		r := &quotaResource{client: &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}}, interval: 10 * time.Millisecond}
+		_, err := r.observe(t.Context(), entity, want, 15*time.Millisecond)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not treated as deleted")
+	})
+
+	t.Run("a_slow_describe_is_not_a_deletion", func(t *testing.T) {
+		r := &quotaResource{client: &fakeQuotaAPI{hang: true}, interval: time.Millisecond}
+		entry, err := r.observe(t.Context(), entity, want, 20*time.Millisecond)
+		require.Error(t, err)
+		assert.Nil(t, entry)
+	})
+}
+
+func TestQuotaReadResourceStates(t *testing.T) {
+	entity := quotaTestEntity()
+	read := func(t *testing.T, api *fakeQuotaAPI) *fwresource.ReadResponse {
+		t.Helper()
+		r := &quotaResource{client: api, interval: time.Millisecond}
+		state := quotaTestState(t, r, quotaTestModel(10))
+		resp := &fwresource.ReadResponse{State: state}
+		// Use a context that ends soon, so the production window is cut short
+		// without a sleep: the poll stops when the context ends.
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+		r.Read(ctx, fwresource.ReadRequest{State: state}, resp)
+		return resp
+	}
+
+	t.Run("no_finished_describe_keeps_the_resource", func(t *testing.T) {
+		resp := read(t, &fakeQuotaAPI{hang: true})
+		require.True(t, resp.Diagnostics.HasError())
+		assert.False(t, resp.State.Raw.IsNull(), "the resource stays in state")
+	})
+
+	t.Run("quota_found_keeps_the_resource", func(t *testing.T) {
+		resp := read(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{quotaEntries(entity, kafkaclient.QuotaValues{"producer_byte_rate": 10})}})
+		require.False(t, resp.Diagnostics.HasError())
+		assert.Equal(t, types.Float64Value(10), quotaProducerRate(t, resp.State))
+	})
+
+	t.Run("absent_every_time_removes_the_resource", func(t *testing.T) {
+		resp := read(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}})
+		require.False(t, resp.Diagnostics.HasError())
+		assert.True(t, resp.State.Raw.IsNull())
+	})
+}
+
+func TestQuotaCreateSavesStateWhenWaitFails(t *testing.T) {
+	entity := quotaTestEntity()
+	// The pre-check describe sees no quota. After the alter, describe fails.
+	api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: errors.New("describe failed"), describeAfterAlter: true}
+	r := &quotaResource{client: api, timeout: time.Second, interval: time.Millisecond}
+	resp := &fwresource.CreateResponse{State: quotaTestState(t, r, nil)}
+	r.Create(t.Context(), fwresource.CreateRequest{Plan: quotaTestPlan(t, r, quotaTestModel(10))}, resp)
+
+	assert.False(t, resp.Diagnostics.HasError(), "the quota was created, so the apply does not fail")
+	assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	assert.Equal(t, 1, api.alters)
+	require.False(t, resp.State.Raw.IsNull(), "state is saved after the quota was created")
+	var id types.String
+	require.False(t, resp.State.GetAttribute(t.Context(), path.Root("id"), &id).HasError())
+	assert.Equal(t, encodeQuotaID(entity), id.ValueString())
+	assert.Equal(t, types.Float64Value(10), quotaProducerRate(t, resp.State))
+}
+
+func TestQuotaUpdateSavesNewValuesWhenWaitFails(t *testing.T) {
+	api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: errors.New("describe failed"), describeAfterAlter: false}
+	r := &quotaResource{client: api, timeout: time.Second, interval: time.Millisecond}
+	state := quotaTestState(t, r, quotaTestModel(10))
+	resp := &fwresource.UpdateResponse{State: state}
+	r.Update(t.Context(), fwresource.UpdateRequest{Plan: quotaTestPlan(t, r, quotaTestModel(20)), State: state}, resp)
+
+	assert.False(t, resp.Diagnostics.HasError(), "the change was accepted, so the apply does not fail")
+	assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	assert.Equal(t, types.Float64Value(20), quotaProducerRate(t, resp.State), "state holds the accepted values")
 }

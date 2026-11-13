@@ -263,12 +263,12 @@ func (r *aclResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 
 	// Brokers learn ACLs asynchronously, so a missing ACL is re-checked for a
 	// short while before it is reported as gone.
-	err := r.waitForACL(ctx, acl, true, r.readWindow)
+	err := r.readACL(ctx, acl)
 	switch {
 	case err == nil:
 		// Present. The describe filter is exact, so state is already correct.
 		resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-	case errors.Is(err, errACLNotSettled):
+	case errors.Is(err, errACLGone):
 		tflog.Info(ctx, "ACL no longer exists, removing from state", aclLogFields(acl))
 		resp.State.RemoveResource(ctx)
 	default:
@@ -360,6 +360,51 @@ func exactACLFilter(acl kafkaclient.ACL) kafkaclient.ACLFilter {
 // errACLNotSettled means the ACL did not reach the expected visibility
 // (present or absent) before the wait ended.
 var errACLNotSettled = errors.New("ACL did not reach the expected state in time")
+
+// errACLGone means describe finished minAbsentChecks times in a row without
+// the ACL, so the ACL does not exist.
+var errACLGone = errors.New("ACL does not exist")
+
+// readACL checks that the ACL exists. It returns nil when describe shows the
+// ACL. It returns an error wrapping errACLGone only after minAbsentChecks
+// consecutive describes that finished without the ACL.
+//
+// If the read window ends first, for example because a describe is slow, the
+// error does not wrap errACLGone, so Read keeps the resource in state. A slow
+// broker must not look like a deleted ACL.
+func (r *aclResource) readACL(ctx context.Context, acl kafkaclient.ACL) error {
+	waitCtx, cancel := context.WithTimeout(ctx, r.readWindow)
+	defer cancel()
+
+	filter := exactACLFilter(acl)
+	var (
+		present bool
+		absent  int // consecutive describes that finished without the ACL
+	)
+	err := pollUntil(waitCtx, r.settleInterval, func(ctx context.Context) (bool, error) {
+		found, err := r.client.DescribeACLs(ctx, filter)
+		if err != nil {
+			return false, err
+		}
+		if slices.Contains(found, acl) {
+			present = true
+			return true, nil
+		}
+		absent++
+		return absent >= minAbsentChecks, nil
+	})
+	switch {
+	case err == nil && present:
+		return nil
+	case err == nil:
+		return errACLGone
+	case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		return fmt.Errorf("ACL not found in %d finished check(s) before the read window ended, so it is not treated as deleted: %w",
+			absent, errACLNotSettled)
+	default:
+		return err
+	}
+}
 
 // waitForACL polls describe until the ACL is visible (present) or no longer
 // visible (!present). It stops after timeout or when ctx ends, and returns an

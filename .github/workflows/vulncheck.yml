@@ -3,14 +3,12 @@
 name: Vulnerability check
 
 on:
+  # No path filter here. A required check that a path filter skips never
+  # reports, and it blocks the pull request.
   pull_request:
-    paths-ignore:
-      - "README.md"
   push:
     branches:
       - "main"
-    paths-ignore:
-      - "README.md"
   schedule:
     # Monday, 06:00 UTC.
     - cron: "0 6 * * 1"

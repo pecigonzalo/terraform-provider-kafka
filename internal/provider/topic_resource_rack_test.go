@@ -29,6 +29,15 @@ type topicLayout struct {
 	rackOf     map[int]string
 }
 
+// partition returns the partition with the given ID.
+func (l topicLayout) partition(id int) (kafkaclient.PartitionInfo, error) {
+	i := slices.IndexFunc(l.partitions, func(p kafkaclient.PartitionInfo) bool { return p.ID == id })
+	if i < 0 {
+		return kafkaclient.PartitionInfo{}, fmt.Errorf("partition %d not found", id)
+	}
+	return l.partitions[i], nil
+}
+
 // racks returns the distinct racks hosting the given replicas.
 func (l topicLayout) racks(replicas []int) []string {
 	var out []string
@@ -83,21 +92,18 @@ func checkLayout(t *testing.T, client *kafkaclient.Client, topic string, verify 
 		defer cancel()
 
 		var last error
-		for {
+		err := pollUntil(ctx, 500*time.Millisecond, func(ctx context.Context) (bool, error) {
 			layout, err := readLayout(ctx, client, topic)
 			if err == nil {
 				err = verify(layout)
 			}
-			if err == nil {
-				return nil
-			}
 			last = err
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("topic %q placement not as expected after %s: %w", topic, rackSettleTimeout, last)
-			case <-time.After(500 * time.Millisecond):
-			}
+			return err == nil, nil
+		})
+		if err != nil {
+			return fmt.Errorf("topic %q placement not as expected after %s: %w", topic, rackSettleTimeout, last)
 		}
+		return nil
 	}
 }
 
@@ -115,8 +121,9 @@ func snapshotLayout(t *testing.T, client *kafkaclient.Client, topic string, want
 	})
 }
 
-// verifyShape checks every partition has want distinct replicas, a leader among
-// them and no reassignment-induced duplicates.
+// verifyShape checks three things for every partition: it has want replicas,
+// no broker appears twice in its replica list, and its leader is one of its
+// replicas.
 func verifyShape(l topicLayout, want int) error {
 	for _, p := range l.partitions {
 		if len(p.Replicas) != want {
@@ -195,7 +202,10 @@ func TestAccTopicResourceRackReplicationFactorIncrease(t *testing.T) {
 					return err
 				}
 				for _, p := range l.partitions {
-					old := before.partitions[p.ID]
+					old, err := before.partition(p.ID)
+					if err != nil {
+						return err
+					}
 					if p.Replicas[0] != old.Replicas[0] {
 						return fmt.Errorf("partition %d moved its existing replica from %v to %v", p.ID, old.Replicas, p.Replicas)
 					}
@@ -233,8 +243,12 @@ func TestAccTopicResourceRackPartitionGrowth(t *testing.T) {
 					return err
 				}
 				for _, old := range before.partitions {
-					if got := l.partitions[old.ID].Replicas; !slices.Equal(got, old.Replicas) {
-						return fmt.Errorf("existing partition %d changed replicas from %v to %v", old.ID, old.Replicas, got)
+					now, err := l.partition(old.ID)
+					if err != nil {
+						return err
+					}
+					if !slices.Equal(now.Replicas, old.Replicas) {
+						return fmt.Errorf("existing partition %d changed replicas from %v to %v", old.ID, old.Replicas, now.Replicas)
 					}
 				}
 				return nil
@@ -297,7 +311,10 @@ func TestAccTopicResourceRackReplicationFactorDecrease(t *testing.T) {
 					return err
 				}
 				for _, p := range l.partitions {
-					old := before.partitions[p.ID]
+					old, err := before.partition(p.ID)
+					if err != nil {
+						return err
+					}
 					if p.Leader != old.Leader {
 						return fmt.Errorf("partition %d leader changed from %d to %d", p.ID, old.Leader, p.Leader)
 					}
@@ -317,8 +334,12 @@ func TestAccTopicResourceRackReplicationFactorDecrease(t *testing.T) {
 					return err
 				}
 				for _, p := range l.partitions {
-					if p.Leader != before.partitions[p.ID].Leader {
-						return fmt.Errorf("partition %d leader changed from %d to %d", p.ID, before.partitions[p.ID].Leader, p.Leader)
+					old, err := before.partition(p.ID)
+					if err != nil {
+						return err
+					}
+					if p.Leader != old.Leader {
+						return fmt.Errorf("partition %d leader changed from %d to %d", p.ID, old.Leader, p.Leader)
 					}
 				}
 				return nil

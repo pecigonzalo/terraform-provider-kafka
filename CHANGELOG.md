@@ -12,6 +12,7 @@ BREAKING CHANGES:
 * provider: A bad value in `KAFKA_SASL_ENABLED` or `KAFKA_TIMEOUT` now gives an error. In v0.5.3, the provider ignored it. Correct the value. (#156)
 * provider: `timeout` must be 1 or more. In v0.5.3, the provider did not check it. If you set `timeout` to 0, use a larger value. (#154)
 * resource/`kafka_acl`, data source `kafka_acls`: `host` must be `*` or one IP address. Kafka matches hosts exactly. It does not support network ranges (such as `10.0.0.0/8`), partial wildcards or host names. An ACL with such a host never matches a client, so a deny ACL did nothing. Plan now gives an error. If you use a range or a host name, replace it with one ACL for each IP address. The principal type `User` must have this exact case. A value such as `user:alice` gives an error. Write `User:alice`. (#184)
+* data source/`kafka_topic`: The attribute `version` is removed. It was always `0`. If your configuration reads `data.kafka_topic.<name>.version`, remove that reference. Plan gives an error if you keep it.
 * resource/`kafka_topic`: `partitions` and `replication_factor` must be 1 or more. `name` must have 1 to 249 characters. It can have only letters, digits, `.`, `_` and `-`. It cannot be `.` or `..`. Plan gives an error if a value is not valid. Correct the value. (#154, #158)
 * resource/`kafka_topic`: Plan now gives an error if you decrease `partitions`. Plan also gives an error if `replication_factor` is more than the number of brokers. In v0.5.3, these errors came during apply. (#159)
 * resource/`kafka_topic`: `configuration` is now optional only. The provider now tracks only the keys that you set. In v0.5.3, `configuration` was also computed, and state held all broker settings. Read the upgrade note below before you apply. (#154)
@@ -50,7 +51,7 @@ NOTES:
     * To increase `replication_factor`, the provider only adds replicas. To decrease it, the provider keeps the leader.
     * This changes which brokers hold the new replicas. It does not change if the result is correct. (#180, #181)
 * provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers. (#173)
-* data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
+* data source/`kafka_topic`: The data source uses the new client. (#173)
 
 ## 0.5.3 (2026-07-15)
 

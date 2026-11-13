@@ -21,6 +21,8 @@ func TestAccTopicDataSource(t *testing.T) {
 					resource.TestCheckResourceAttr("data.kafka_topic.test", "name", existingTopic),
 					resource.TestCheckResourceAttr("data.kafka_topic.test", "partitions", "1"),
 					resource.TestCheckResourceAttr("data.kafka_topic.test", "replication_factor", "1"),
+					// The attribute `version` is removed.
+					resource.TestCheckNoResourceAttr("data.kafka_topic.test", "version"),
 				),
 			},
 		},

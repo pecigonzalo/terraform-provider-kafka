@@ -32,7 +32,6 @@ type topicDataSourceModel struct {
 	Name              types.String `tfsdk:"name"`
 	Partitions        types.Int64  `tfsdk:"partitions"`
 	ReplicationFactor types.Int64  `tfsdk:"replication_factor"`
-	Version           types.Int64  `tfsdk:"version"`
 	Config            types.Map    `tfsdk:"configuration"`
 }
 
@@ -59,10 +58,6 @@ func (d *topicDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 			},
 			"replication_factor": schema.Int64Attribute{
 				MarkdownDescription: "Topic replication factor",
-				Computed:            true,
-			},
-			"version": schema.Int64Attribute{
-				MarkdownDescription: "Topic version",
 				Computed:            true,
 			},
 			"configuration": schema.MapAttribute{
@@ -123,9 +118,6 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 	data.Name = types.StringValue(topicInfo.Name)
 	data.Partitions = types.Int64Value(int64(len(topicInfo.Partitions)))
 	data.ReplicationFactor = types.Int64Value(int64(replicationFactor))
-	// The attribute is kept for compatibility. The topic version has
-	// always been 0 and the kafkaclient reports none.
-	data.Version = types.Int64Value(0)
 
 	configElement := make(map[string]attr.Value)
 	for k, v := range topicInfo.Config {

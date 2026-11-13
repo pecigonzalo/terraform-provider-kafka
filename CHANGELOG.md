@@ -11,6 +11,7 @@ BREAKING CHANGES:
 * provider: `bootstrap_servers` is now optional. If you do not set it, the provider uses `KAFKA_BOOTSTRAP_SERVERS`. This variable holds a comma-separated list. The default `localhost:9092` is removed. If you set neither, the provider gives an error. Set one of them. (#152)
 * provider: A bad value in `KAFKA_SASL_ENABLED` or `KAFKA_TIMEOUT` now gives an error. In v0.5.3, the provider ignored it. Correct the value. (#156)
 * provider: `timeout` must be 1 or more. In v0.5.3, the provider did not check it. If you set `timeout` to 0, use a larger value. (#154)
+* data source/`kafka_topic`: The attribute `version` is removed. It was always `0`. If your configuration reads `data.kafka_topic.<name>.version`, remove that reference. Plan gives an error if you keep it. (#191)
 * provider: There is no default SASL mechanism now. In earlier versions, the default was `aws-msk-iam`. SASL is still on by default, so you must set `sasl.mechanism` or `KAFKA_SASL_MECHANISM`. If you used the old default, set `mechanism = "aws-msk-iam"`. If you set no mechanism and SASL is on, the provider gives an error that lists the valid mechanisms. To turn SASL off, set `sasl = { enabled = false }`. (#186)
 * provider: With `aws-msk-iam`, a SASL user name or password is now an error. This includes `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD`. In earlier versions, the provider ignored these values without a message. This mechanism uses your AWS credentials. Remove the user name and the password. (#186)
 * provider: With `plain`, `scram-sha256` and `scram-sha512`, an empty SASL user name or password is now an error. The error names the missing value. It never shows the value. (#186)
@@ -67,7 +68,7 @@ NOTES:
     * To increase `replication_factor`, the provider only adds replicas. To decrease it, the provider keeps the leader.
     * This changes which brokers hold the new replicas. It does not change if the result is correct. (#180, #181)
 * provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers. (#173)
-* data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
+* data source/`kafka_topic`: The data source uses the new client. (#173)
 * The project now has a `LICENSE` file with the MIT license. Before this, the repository had no license file. (#192)
 
 ## 0.5.3 (2026-07-15)

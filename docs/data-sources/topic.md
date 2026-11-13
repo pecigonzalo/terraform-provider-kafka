@@ -31,4 +31,3 @@ data "kafka_topic" "example" {
 - `id` (String) Topic id, the same as the topic name
 - `partitions` (Number) Topic partitions count
 - `replication_factor` (Number) Topic replication factor
-- `version` (Number) Topic version

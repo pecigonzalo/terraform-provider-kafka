@@ -4,7 +4,7 @@
 #
 # Usage:
 #   scripts/changelog.sh preview             Print the entries that are not in a release yet.
-#   scripts/changelog.sh release VERSION     Write the section for VERSION at the top of CHANGELOG.md.
+#   scripts/changelog.sh notes               Print the release notes for the commit that is checked out.
 #   scripts/changelog.sh check               Check the format of all entry files.
 
 set -euo pipefail
@@ -16,9 +16,14 @@ readonly ENTRIES_DIR=".changelog"
 readonly TEMPLATES_DIR=".changelog-templates"
 readonly NOTE_TYPES="breaking-change upgrade-note new-resource new-data-source feature enhancement bug note"
 
-# Print the last release tag, or nothing if there is none.
+# Print the last release tag before the commit that is checked out, or nothing if there is none.
+# A tag on the checked-out commit is not "before": the release workflow runs on the new tag.
 last_tag() {
-  git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true
+  local at_head
+  at_head="$(git tag --points-at HEAD)"
+  # versionsort.suffix makes a pre-release tag such as v1.0.0-rc1 sort before v1.0.0.
+  git -c versionsort.suffix=- tag --merged HEAD --list 'v[0-9]*' --sort=-v:refname |
+    grep -vxF -e "${at_head:-/no-tag/}" | head -n 1 || true
 }
 
 # Print the entries added since the last release tag.
@@ -46,35 +51,14 @@ preview() {
   build
 }
 
-release() {
-  local version="${1:-}"
-  if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-    echo "error: give a version such as 1.0.0 (no leading v)." >&2
-    exit 1
-  fi
-  if grep -q "^## ${version} " CHANGELOG.md; then
-    echo "error: CHANGELOG.md has a section for ${version} already." >&2
-    exit 1
-  fi
+notes() {
   local body
   body="$(build)"
   if [[ -z "${body}" ]]; then
     echo "error: there are no new entries since the last release." >&2
     exit 1
   fi
-  local tmp
-  tmp="$(mktemp)"
-  # shellcheck disable=SC2064 # Expand now: "tmp" is local and does not exist when the trap runs.
-  trap "rm -f '${tmp}'" EXIT
-  {
-    # Keep the title and the text before the first version section.
-    awk '/^## /{exit} {print}' CHANGELOG.md
-    printf '## %s (%s)\n\n%s\n\n' "${version}" "$(date +%Y-%m-%d)" "${body}"
-    awk 'f{print} /^## /&&!f{f=1; print}' CHANGELOG.md
-  } >"${tmp}"
-  # Write into the existing file, so that it keeps its permissions.
-  cat "${tmp}" >CHANGELOG.md
-  rm -f "${tmp}"
+  printf '%s\n' "${body}"
 }
 
 check() {
@@ -143,10 +127,10 @@ check() {
 main() {
   case "${1:-}" in
     preview) preview ;;
-    release) release "${2:-}" ;;
+    notes) notes ;;
     check) check ;;
     *)
-      echo "usage: $0 preview | release VERSION | check" >&2
+      echo "usage: $0 preview | notes | check" >&2
       exit 2
       ;;
   esac

@@ -193,12 +193,16 @@ To check the files, run `make changelog-check`. It checks that the file name has
 
 ### Release steps
 
-1. Make sure that `main` has all the entries for the release and that `make changelog-check` passes.
-2. Run `make changelog-release VERSION=x.y.z`. This writes the section `## x.y.z (date)` at the top of `CHANGELOG.md`. The build uses the entries that are new since the last release tag.
-3. Read the new section. If an entry is wrong, run `git checkout CHANGELOG.md`, correct the entry file, commit it, and do step 2 again.
-4. Commit `CHANGELOG.md`, merge the change, and create the tag `vx.y.z` on the merge commit.
+1. Make sure that `main` has all the entries for the release, and that `make changelog-check` passes.
+2. Run `make changelog-preview` to read the release notes before you publish.
+3. Create the release on the releases page. Make a new tag `vx.y.z` on `main`. You do not need to write notes.
+4. The release workflow runs when the tag is pushed. It builds the notes with `make changelog-notes` and gives them to GoReleaser. GoReleaser replaces the text of the release with these notes.
 
-Do not delete entry files after a release. The next build finds the new entries by comparing the files at the last release tag with the files at `HEAD`. The tag must be on a commit that has `.changelog/`. If the last tag was made before `.changelog/` existed, the build uses all entries.
+The build fails if there is no new entry since the last release, so the release stops before it publishes anything. Add an entry (for example a `note`) for a release that has no user-visible change.
+
+If an entry is wrong, correct the entry file in a PR. Then delete the tag and the release, and create them again.
+
+The build finds the new entries by comparing the files in `.changelog/` at the last release tag with the files at the new tag. For this reason you do not need to delete old entry files, and the folder grows by one small file for each PR. You can delete old files, because the previous tag still has them. This is not necessary. If the last tag was made before `.changelog/` existed, the build uses all entries.
 
 ## FAQ
 

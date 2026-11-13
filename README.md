@@ -124,17 +124,17 @@ own containers on free ports, so runs can execute in parallel.
 
 ## Changelog entries
 
-Each pull request that changes what users see adds one file to the directory `.changelog/`. Name the file with the number of your pull request, for example `.changelog/154.txt`. Use only one number. A change that only affects the code, the tests or the build needs no file.
+Each pull request that changes what users see adds one file to the directory `.changelog/`. Name the file with the number of your pull request and `.txt`, for example `.changelog/154.txt`. The name has only digits before `.txt`. A change that only affects the code, the tests or the build needs no file.
 
 The file has one block for each entry. A block has this form:
 
 ````markdown
 ```release-note:TYPE
-Text of the entry.
+Text of the entry. (#154)
 ```
 ````
 
-Write the text of the entry in the same style as the existing entries. Start with the thing that changes, for example `resource/`kafka_topic`:` or `provider:`. Do not write the pull request number. The build adds it.
+Write the text of the entry in the same style as the existing entries. Start with the thing that changes, for example `resource/`kafka_topic`:` or `provider:`. End the text with the number of your pull request in parentheses, for example `(#154)`. The build prints the text as you write it.
 
 Use one of these types:
 
@@ -153,43 +153,43 @@ Examples:
 
 ````markdown
 ```release-note:breaking-change
-provider: `timeout` must be 1 or more. Set a larger value if you used 0.
+provider: `timeout` must be 1 or more. Set a larger value if you used 0. (#154)
 ```
 
 ```release-note:upgrade-note
-resource/`kafka_topic`: Run `terraform plan` after you upgrade.
+resource/`kafka_topic`: Run `terraform plan` after you upgrade. (#154)
 ```
 
 ```release-note:new-resource
-`kafka_quota` manages the quotas of one entity.
+`kafka_quota` manages the quotas of one entity. (#154)
 ```
 
 ```release-note:new-data-source
-`kafka_acls` lists the ACL entries that match the filters.
+`kafka_acls` lists the ACL entries that match the filters. (#154)
 ```
 
 ```release-note:feature
-provider: Support for a new SASL mechanism.
+provider: Support for a new SASL mechanism. (#154)
 ```
 
 ```release-note:enhancement
-provider: New environment variable `KAFKA_TLS_ENABLED`.
+provider: New environment variable `KAFKA_TLS_ENABLED`. (#154)
 ```
 
 ```release-note:bug
-resource/`kafka_topic`: Delete succeeds if the topic is already gone.
+resource/`kafka_topic`: Delete succeeds if the topic is already gone. (#154)
 ```
 
 ```release-note:note
-provider: The build now uses a newer Go version.
+provider: The build now uses a newer Go version. (#154)
 ```
 ````
 
-One file can have more than one block.
+One file can have more than one block. Each block ends with a marker.
 
-Some old entries belong to more than one pull request. Their file names have all the numbers, for example `.changelog/154, #158.txt`, and the build prints `(#154, #158)`. These names have spaces and `#`, so put quotes around them in a shell. A new entry does not need this form.
+If an entry belongs to more than one pull request, write all numbers in the marker, for example `(#154, #158)`. Name the file with the first number, `.changelog/154.txt`. If the entry has a list, you can put the marker at the end of the first line instead of the end of the last line.
 
-To check the format of all files, run `make changelog-check`. To see the entries that are not in a release yet, commit them and run `make changelog-preview`.
+To check the files, run `make changelog-check`. It checks that the file name has only digits, that every block has a known type, that every block has a marker, and that the first number of the marker is the number in the file name. To see the entries that are not in a release yet, commit them and run `make changelog-preview`.
 
 ### Release steps
 

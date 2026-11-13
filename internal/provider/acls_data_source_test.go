@@ -45,7 +45,7 @@ func aclWith(mutate func(*kafkaclient.ACL)) kafkaclient.ACL {
 	return a
 }
 
-// aclsFilterConfig builds a data source config value. Keys missing from set are
+// aclsConfigValue builds a data source config value. Keys missing from set are
 // null; a nil entry is an unknown value.
 func aclsConfigValue(t *testing.T, set map[string]*string) tftypes.Value {
 	t.Helper()

@@ -54,9 +54,7 @@ NOTES:
     * To increase `replication_factor`, the provider only adds replicas. To decrease it, the provider keeps the leader.
     * This changes which brokers hold the new replicas. It does not change if the result is correct. (#180, #181)
 * provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers. (#173)
-* data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
 * provider: The build now uses Go 1.27.4. Go 1.25 is at its end of life and has no more security fixes. To build the provider from source, you now need Go 1.27 or later. This does not change the released files. This version also has fixes for known vulnerabilities, and the dependencies `golang.org/x/net` and `github.com/klauspost/compress` have new versions with fixes. (#190)
-* data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
 * data source/`kafka_topic`: The data source uses the new client. (#173)
 * The project now has a `LICENSE` file with the MIT license. Before this, the repository had no license file. (#192)
 

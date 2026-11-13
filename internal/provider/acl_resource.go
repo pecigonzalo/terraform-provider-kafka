@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/diag"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -242,15 +241,17 @@ func (r *aclResource) Create(ctx context.Context, req resource.CreateRequest, re
 	}
 	data.ID = types.StringValue(encodeACLID(acl))
 
-	// Save state before waiting: the ACL exists now, so if the wait fails
-	// Terraform must still know about it (the resource is marked tainted).
+	// Save state before waiting: the ACL exists now, so Terraform must know
+	// about it. If the wait ends early, the result is a warning and not an
+	// error: an error would taint the resource, and the next apply would
+	// replace an ACL that is correct.
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	if err := r.waitForACL(ctx, acl, true, r.settleTimeout()); err != nil {
-		addACLError(&resp.Diagnostics, "ACL created but not visible yet", err)
+		addSettleWarning(&resp.Diagnostics, "ACL created but not visible yet", aclErrorDetail(err))
 	}
 }
 
@@ -301,8 +302,10 @@ func (r *aclResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 		addACLError(&resp.Diagnostics, "Unable to delete ACL", err)
 		return
 	}
+	// The broker accepted the delete. If the wait ends early, the result is a
+	// warning, so Terraform still removes the resource from state.
 	if err := r.waitForACL(ctx, acl, false, r.settleTimeout()); err != nil {
-		addACLError(&resp.Diagnostics, "ACL deleted but still visible", err)
+		addSettleWarning(&resp.Diagnostics, "ACL deleted but still visible", aclErrorDetail(err))
 	}
 }
 
@@ -314,7 +317,6 @@ func (r *aclResource) ImportState(ctx context.Context, req resource.ImportStateR
 	}
 	data := aclToModel(acl)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), data.ID)...)
 }
 
 // acl converts the model to a kafkaclient.ACL. known is false when any
@@ -451,6 +453,18 @@ func aclLogFields(acl kafkaclient.ACL) map[string]any {
 	}
 }
 
+// addSettleWarning reports a wait that ended before the broker showed a change
+// that it accepted. It is a warning for every cause, for example a timeout or
+// a refused describe: the change is done, and an error would taint the
+// resource. The next refresh shows what the broker reports. The reason is the
+// text that explains why the wait ended.
+func addSettleWarning(diags *diag.Diagnostics, summary, reason string) {
+	diags.AddWarning(summary,
+		"The broker accepted the change, but the wait for the broker to report it ended early. "+
+			"Run terraform plan to refresh the state and show what the broker reports.\n\n"+
+			"Reason: "+reason)
+}
+
 // addACLError reports err with advice matching its cause.
 func addACLError(diags *diag.Diagnostics, summary string, err error) {
 	diags.AddError(summary, aclErrorDetail(err))
@@ -487,10 +501,6 @@ func aclErrorDetailFor(access aclAccess, err error) string {
 			"Error: " + err.Error()
 	case errors.Is(err, kafkaclient.ErrInvalidACL):
 		return "The ACL is not valid: " + err.Error()
-	case errors.Is(err, errACLNotSettled):
-		return "The broker did not report the change in time; brokers can lag behind the controller. " +
-			"Run terraform apply again to re-check it.\n\n" +
-			"Error: " + err.Error()
 	default:
 		return err.Error()
 	}

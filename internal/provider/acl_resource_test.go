@@ -170,7 +170,6 @@ func TestACLErrorDetail(t *testing.T) {
 		{"no_authorizer", fmt.Errorf("create ACL: %w", kafkaclient.ErrSecurityDisabled), "no authorizer configured"},
 		{"not_authorized", fmt.Errorf("create ACL: %w", kafkaclient.ErrNotAuthorized), "not authorized to manage ACLs"},
 		{"invalid", fmt.Errorf("create ACL: %w", kafkaclient.ErrInvalidACL), "not valid"},
-		{"not_settled", errACLNotSettled, "apply again"},
 		{"other", errors.New("boom"), "boom"},
 	}
 	for _, tc := range tests {
@@ -227,6 +226,8 @@ type fakeACLAPI struct {
 	timeout     time.Duration
 	hidden      bool // created ACLs never become visible, deleted ones never go
 	hang        bool // describe waits until its context ends
+	createErr   error
+	deleteErr   error
 }
 
 func (f *fakeACLAPI) Timeout() time.Duration { return f.timeout }
@@ -234,6 +235,9 @@ func (f *fakeACLAPI) Timeout() time.Duration { return f.timeout }
 func (f *fakeACLAPI) CreateACL(_ context.Context, acl kafkaclient.ACL) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.createErr != nil {
+		return f.createErr
+	}
 	f.before = slices.Clone(f.acls)
 	f.pending = f.lag
 	f.created = append(f.created, acl)
@@ -272,6 +276,9 @@ func (f *fakeACLAPI) DescribeACLs(ctx context.Context, filter kafkaclient.ACLFil
 func (f *fakeACLAPI) DeleteACLs(_ context.Context, filter kafkaclient.ACLFilter) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteErr != nil {
+		return 0, f.deleteErr
+	}
 	f.before = slices.Clone(f.acls)
 	f.pending = f.lag
 	f.deleted = append(f.deleted, filter)
@@ -471,60 +478,116 @@ func aclSchema(t *testing.T, r *aclResource) fwresourceschema.Schema {
 }
 
 // TestACLWritesWaitUpToProviderTimeout shows Create and Delete are bounded by
-// the client timeout: with a change that never becomes visible they stop after
-// that timeout with advice to apply again.
+// the client timeout. The broker accepted the write, so a wait that ends early
+// gives a warning and no error. A tainted resource would be replaced by the
+// next apply, although the ACL is correct.
 func TestACLWritesWaitUpToProviderTimeout(t *testing.T) {
-	t.Run("create", func(t *testing.T) {
-		api := &fakeACLAPI{hidden: true, timeout: 30 * time.Millisecond}
+	createACL := func(t *testing.T, api *fakeACLAPI, cancelled bool) *fwresource.CreateResponse {
+		t.Helper()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		if cancelled {
+			cancel()
+		}
 		r := newTestACLResource(api)
 		sch := aclSchema(t, r)
 		plan := tfsdk.Plan{Schema: sch, Raw: aclModelObject(t, r, testACL())}
 		resp := &fwresource.CreateResponse{State: tfsdk.State{Schema: sch}}
-		r.Create(t.Context(), fwresource.CreateRequest{Plan: plan}, resp)
+		r.Create(ctx, fwresource.CreateRequest{Plan: plan}, resp)
+		return resp
+	}
 
-		require.True(t, resp.Diagnostics.HasError())
-		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "apply again")
+	t.Run("create_warns_when_the_wait_times_out", func(t *testing.T) {
+		api := &fakeACLAPI{hidden: true, timeout: 30 * time.Millisecond}
+		resp := createACL(t, api, false)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		require.Equal(t, 1, resp.Diagnostics.WarningsCount())
+		assert.Contains(t, resp.Diagnostics.Warnings()[0].Detail(), "accepted the change")
 		assert.Greater(t, api.describes, 1, "describe was retried until the timeout")
-		assert.False(t, resp.State.Raw.IsNull(), "state is saved before waiting")
+		assert.False(t, resp.State.Raw.IsNull(), "state is saved")
 	})
 
-	t.Run("delete", func(t *testing.T) {
-		api := &fakeACLAPI{hidden: true, timeout: 30 * time.Millisecond, acls: []kafkaclient.ACL{testACL()}}
+	t.Run("create_warns_when_describe_fails_after_the_write", func(t *testing.T) {
+		api := &fakeACLAPI{describeErr: errors.New("describe failed"), timeout: time.Second}
+		resp := createACL(t, api, false)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		require.Equal(t, 1, resp.Diagnostics.WarningsCount())
+		assert.Contains(t, resp.Diagnostics.Warnings()[0].Detail(), "describe failed")
+		assert.False(t, resp.State.Raw.IsNull(), "state is saved")
+	})
+
+	t.Run("create_warning_keeps_the_advice_for_a_refused_describe", func(t *testing.T) {
+		api := &fakeACLAPI{describeErr: kafkaclient.ErrNotAuthorized, timeout: time.Second}
+		resp := createACL(t, api, false)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		require.Equal(t, 1, resp.Diagnostics.WarningsCount())
+		assert.Contains(t, resp.Diagnostics.Warnings()[0].Detail(), "not authorized")
+	})
+
+	t.Run("create_fails_when_the_write_fails", func(t *testing.T) {
+		api := &fakeACLAPI{createErr: errors.New("write refused"), timeout: time.Second}
+		resp := createACL(t, api, false)
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.True(t, resp.State.Raw.IsNull(), "no state is saved when the write fails")
+	})
+
+	t.Run("create_succeeds_when_visible", func(t *testing.T) {
+		api := &fakeACLAPI{lag: 3, timeout: 2 * time.Second}
+		resp := createACL(t, api, false)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 0, resp.Diagnostics.WarningsCount())
+		assert.Equal(t, 4, api.describes)
+	})
+
+	t.Run("create_with_cancelled_context_warns_and_saves_state", func(t *testing.T) {
+		api := &fakeACLAPI{hidden: true, timeout: time.Minute}
+		resp := createACL(t, api, true)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+		assert.False(t, resp.State.Raw.IsNull(), "state is saved")
+	})
+
+	deleteACL := func(t *testing.T, api *fakeACLAPI) *fwresource.DeleteResponse {
+		t.Helper()
 		r := newTestACLResource(api)
 		sch := aclSchema(t, r)
 		state := tfsdk.State{Schema: sch, Raw: aclModelObject(t, r, testACL())}
 		resp := &fwresource.DeleteResponse{State: state}
 		r.Delete(t.Context(), fwresource.DeleteRequest{State: state}, resp)
+		return resp
+	}
 
-		require.True(t, resp.Diagnostics.HasError())
-		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "apply again")
+	t.Run("delete_warns_when_the_wait_times_out", func(t *testing.T) {
+		api := &fakeACLAPI{hidden: true, timeout: 30 * time.Millisecond, acls: []kafkaclient.ACL{testACL()}}
+		resp := deleteACL(t, api)
+
+		// With no error, the framework removes the resource from state.
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		require.Equal(t, 1, resp.Diagnostics.WarningsCount())
 		assert.Greater(t, api.describes, 1)
 	})
 
-	t.Run("create_succeeds_when_visible", func(t *testing.T) {
-		api := &fakeACLAPI{lag: 3, timeout: 2 * time.Second}
-		r := newTestACLResource(api)
-		sch := aclSchema(t, r)
-		plan := tfsdk.Plan{Schema: sch, Raw: aclModelObject(t, r, testACL())}
-		resp := &fwresource.CreateResponse{State: tfsdk.State{Schema: sch}}
-		r.Create(t.Context(), fwresource.CreateRequest{Plan: plan}, resp)
-
-		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
-		assert.Equal(t, 4, api.describes)
-	})
-
-	t.Run("cancelled_context_is_not_advice_to_apply_again", func(t *testing.T) {
-		api := &fakeACLAPI{hidden: true, timeout: time.Minute}
-		r := newTestACLResource(api)
-		sch := aclSchema(t, r)
-		plan := tfsdk.Plan{Schema: sch, Raw: aclModelObject(t, r, testACL())}
-		resp := &fwresource.CreateResponse{State: tfsdk.State{Schema: sch}}
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		r.Create(ctx, fwresource.CreateRequest{Plan: plan}, resp)
+	t.Run("delete_fails_when_the_write_fails", func(t *testing.T) {
+		api := &fakeACLAPI{deleteErr: errors.New("write refused"), timeout: time.Second}
+		resp := deleteACL(t, api)
 
 		require.True(t, resp.Diagnostics.HasError())
-		assert.NotContains(t, resp.Diagnostics.Errors()[0].Detail(), "apply again")
+		assert.Equal(t, 0, api.describes, "no wait after a failed write")
+	})
+
+	t.Run("delete_succeeds_when_gone", func(t *testing.T) {
+		api := &fakeACLAPI{lag: 2, timeout: 2 * time.Second, acls: []kafkaclient.ACL{testACL()}}
+		resp := deleteACL(t, api)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 0, resp.Diagnostics.WarningsCount())
+		assert.Equal(t, 3, api.describes)
 	})
 }
 

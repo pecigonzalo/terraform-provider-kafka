@@ -4,14 +4,18 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/protocol/describeclientquotas"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
@@ -91,29 +95,132 @@ func TestAccQuotaResource(t *testing.T) {
 	})
 }
 
-// waitForQuotaValues fails the test unless every broker in
-// KAFKA_BOOTSTRAP_SERVERS reports exactly the wanted limits for the quota with
-// the given id.
+// pinnedTransport returns a transport that dials address for every
+// connection, whatever broker the cluster metadata names. A request through it
+// reaches that broker only.
+func pinnedTransport(address string) *kafka.Transport {
+	return &kafka.Transport{
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		},
+	}
+}
+
+// describeQuotaOnBroker asks one named broker for the quota on exactly entity.
+// It returns nil if that broker reports no quota.
 //
-// An import adopts every limit that the broker reports. It has no expected
-// state to wait for. The client can reach a broker that has not applied a
-// recent change yet, so an import right after a change can see old limits.
-// Tests call this from PreConfig of an import step first.
+// The provider client sends a DescribeClientQuotas request to the controller
+// that its cached metadata names. A KRaft cluster answers every metadata
+// request with a random live broker as the controller, so the request goes to
+// a different broker after each metadata refresh. A client that points at one
+// bootstrap address does not ask that broker. This function dials the wanted
+// broker for every connection, so the answer comes from that broker only.
+func describeQuotaOnBroker(ctx context.Context, address string, entity kafkaclient.QuotaEntity) (*kafkaclient.QuotaEntry, error) {
+	transport := pinnedTransport(address)
+	defer transport.CloseIdleConnections()
+
+	req := &describeclientquotas.Request{Strict: true}
+	for entityType, name := range entity {
+		component := describeclientquotas.Component{EntityType: string(entityType), Match: name.Name}
+		if name.Default {
+			component.MatchType, component.Match = 1, ""
+		}
+		req.Components = append(req.Components, component)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	message, err := transport.RoundTrip(ctx, kafka.TCP(address), req)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := message.(*describeclientquotas.Response)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type %T", message)
+	}
+	if resp.ErrorCode != 0 {
+		return nil, fmt.Errorf("broker %s answered with error code %d: %s", address, resp.ErrorCode, resp.ErrorMessage)
+	}
+	for _, e := range resp.Entries {
+		entry := kafkaclient.QuotaEntry{Entity: kafkaclient.QuotaEntity{}, Values: kafkaclient.QuotaValues{}}
+		for _, part := range e.Entities {
+			entry.Entity[kafkaclient.QuotaEntityType(part.EntityType)] = kafkaclient.QuotaEntityName{Name: part.EntityName, Default: part.EntityName == ""}
+		}
+		for _, v := range e.Values {
+			entry.Values[kafkaclient.QuotaKey(v.Key)] = v.Value
+		}
+		if sameQuotaEntity(entry.Entity, entity) {
+			return &entry, nil
+		}
+	}
+	return nil, nil
+}
+
+// waitForQuotaValues fails the test unless every broker reports exactly the
+// wanted limits for the quota with the given id. An empty want means that
+// every broker must report no quota.
+//
+// The provider client reaches one broker at a time and can switch to another.
+// A broker that has not applied a recent change yet answers with the old
+// state. Tests call this from PreConfig, after a change made outside
+// Terraform, so that the next step reads the same state from every broker. An
+// import has no expected state to wait for, so it needs this.
 func waitForQuotaValues(t *testing.T, id string, want kafkaclient.QuotaValues) {
 	t.Helper()
 
 	entity, err := decodeQuotaID(id)
 	require.NoError(t, err)
+	require.NoError(t, waitForQuotaOnEveryBroker(t.Context(), entity, want))
+}
 
-	for address := range strings.SplitSeq(os.Getenv("KAFKA_BOOTSTRAP_SERVERS"), ",") {
-		client, err := kafkaclient.New(t.Context(), kafkaclient.Config{BootstrapServer: address, Timeout: 10 * time.Second})
-		require.NoError(t, err)
-		require.Eventually(t, func() bool {
-			entry, err := describeQuota(t.Context(), client, entity)
-			return err == nil && entry != nil && maps.Equal(entry.Values, want)
-		}, 30*time.Second, 200*time.Millisecond,
-			"broker %s does not report the limits %v for quota %q", address, want, id)
+// waitForQuotaOnEveryBroker polls each broker of the cluster, one at a time,
+// until it reports exactly the wanted limits for the entity. An empty want
+// means no quota. It returns an error if one broker still reports something
+// else after 30 seconds.
+func waitForQuotaOnEveryBroker(ctx context.Context, entity kafkaclient.QuotaEntity, want kafkaclient.QuotaValues) error {
+	addresses, err := testAccBrokerAddresses(ctx)
+	if err != nil {
+		return err
 	}
+	for _, address := range addresses {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		var entry *kafkaclient.QuotaEntry
+		err := pollUntil(ctx, 100*time.Millisecond, func(ctx context.Context) (bool, error) {
+			var err error
+			entry, err = describeQuotaOnBroker(ctx, address, entity)
+			if err != nil {
+				return false, err
+			}
+			if entry == nil {
+				return len(want) == 0, nil
+			}
+			return maps.Equal(entry.Values, want), nil
+		})
+		cancel()
+		if err != nil {
+			return fmt.Errorf("broker %s does not report the limits %v for quota %v (last answer %v): %w", address, want, entity, entry, err)
+		}
+	}
+	return nil
+}
+
+// testAccBrokerAddresses returns the address of every broker in the cluster,
+// as the cluster advertises them.
+func testAccBrokerAddresses(ctx context.Context) ([]string, error) {
+	bootstrap, _, _ := strings.Cut(os.Getenv("KAFKA_BOOTSTRAP_SERVERS"), ",")
+	client, err := kafkaclient.New(ctx, kafkaclient.Config{BootstrapServer: bootstrap, Timeout: 10 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+	metadata, err := client.Metadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+	addresses := make([]string, 0, len(metadata.Brokers))
+	for _, broker := range metadata.Brokers {
+		addresses = append(addresses, net.JoinHostPort(broker.Host, strconv.Itoa(broker.Port)))
+	}
+	return addresses, nil
 }
 
 // testAccQuotaClient returns a client for the first broker in
@@ -283,22 +390,34 @@ func TestAccQuotaResourceReplacesOnEntityChange(t *testing.T) {
 	})
 }
 
+// TestAccQuotaResourceRejectsExisting checks that create refuses an entity that
+// already has quotas. The check is best effort: it asks one broker, which can
+// be behind. The test makes it reliable: it waits until every broker reports
+// the quota before it applies.
 func TestAccQuotaResourceRejectsExisting(t *testing.T) {
 	user := testAccQuotaName(t, "existing")
+	id := "user=" + user
+	entity, err := decodeQuotaID(id)
+	require.NoError(t, err)
+
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
+				PreConfig: func() {
+					client := testAccQuotaClient(t)
+					limits := kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 1000}
+					require.NoError(t, client.AlterQuotas(t.Context(), entity, limits, nil))
+					t.Cleanup(func() {
+						_ = client.AlterQuotas(context.Background(), entity, nil, []string{string(kafkaclient.QuotaProducerByteRate)})
+					})
+					waitForQuotaValues(t, id, limits)
+				},
 				Config: providerConfig + fmt.Sprintf(`
-resource "kafka_quota" "first" {
-  user = { name = %[1]q }
-  producer_byte_rate = 1000
-}
-resource "kafka_quota" "second" {
-  user = { name = %[1]q }
+resource "kafka_quota" "test" {
+  user = { name = %q }
   consumer_byte_rate = 1000
-  depends_on = [kafka_quota.first]
 }
 `, user),
 				ExpectError: regexp.MustCompile(`Quota already exists`),
@@ -379,33 +498,12 @@ func testAccCheckQuotaGone(id string) resource.TestCheckFunc {
 }
 
 // testAccQuotaAbsent fails unless the quota with the given id is gone from
-// every broker. Brokers learn about removals asynchronously, so it waits for a
-// short while before reporting a quota that is still there.
+// every broker. Brokers learn about removals at different times, so it asks
+// each broker for up to 30 seconds.
 func testAccQuotaAbsent(id string) error {
 	entity, err := decodeQuotaID(id)
 	if err != nil {
 		return err
 	}
-	ctx := context.Background()
-	for address := range strings.SplitSeq(os.Getenv("KAFKA_BOOTSTRAP_SERVERS"), ",") {
-		client, err := kafkaclient.New(ctx, kafkaclient.Config{BootstrapServer: address, Timeout: 10 * time.Second})
-		if err != nil {
-			return err
-		}
-		deadline := time.Now().Add(30 * time.Second)
-		for {
-			entry, err := describeQuota(ctx, client, entity)
-			if err != nil {
-				return err
-			}
-			if entry == nil {
-				break
-			}
-			if time.Now().After(deadline) {
-				return fmt.Errorf("quota %q still exists on broker %s: %v", id, address, entry.Values)
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
-	return nil
+	return waitForQuotaOnEveryBroker(context.Background(), entity, nil)
 }

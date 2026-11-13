@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/boolvalidator"
@@ -275,16 +276,18 @@ func (r *quotaResource) Create(ctx context.Context, req resource.CreateRequest, 
 		return
 	}
 
-	// Save state before waiting: the quota exists now, so if the wait fails
-	// Terraform must still know about it. Without this, the next apply would
-	// fail with "Quota already exists".
+	// Save state before waiting: the quota exists now, so Terraform must know
+	// about it. Without this, the next apply would fail with "Quota already
+	// exists". If the wait ends early, the result is a warning and not an
+	// error: an error would taint the resource, and the next apply would
+	// replace a quota that is correct.
 	data.ID = types.StringValue(id)
 	resp.Diagnostics.Append(resp.State.Set(ctx, data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	if err := r.settle(ctx, entity, quotaExpectation{present: limits}); err != nil {
-		addQuotaSettleDiagnostic(&resp.Diagnostics, "Quota created but not visible yet", err)
+		addSettleWarning(&resp.Diagnostics, "Quota created but not visible yet", quotaErrorMessage(err))
 	}
 }
 
@@ -357,6 +360,8 @@ func (r *quotaResource) Update(ctx context.Context, req resource.UpdateRequest, 
 			remove = append(remove, string(key))
 		}
 	}
+	// Map order is random. Sort, so the request is the same every time.
+	slices.Sort(remove)
 	tflog.Info(ctx, "Updating quota", map[string]any{"id": state.ID.ValueString()})
 	if err := r.client.AlterQuotas(ctx, entity, set, remove); err != nil {
 		addQuotaError(&resp.Diagnostics, "Unable to update quota", err)
@@ -376,7 +381,7 @@ func (r *quotaResource) Update(ctx context.Context, req resource.UpdateRequest, 
 		return
 	}
 	if err := r.settle(ctx, entity, exp); err != nil {
-		addQuotaSettleDiagnostic(&resp.Diagnostics, "Quota change not visible yet", err)
+		addSettleWarning(&resp.Diagnostics, "Quota change not visible yet", quotaErrorMessage(err))
 	}
 }
 
@@ -411,8 +416,10 @@ func (r *quotaResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 		addQuotaError(&resp.Diagnostics, "Unable to delete quota", err)
 		return
 	}
+	// The broker accepted the removal. If the wait ends early, the result is a
+	// warning, so Terraform still removes the resource from state.
 	if err := r.settle(ctx, entity, exp); err != nil {
-		addQuotaError(&resp.Diagnostics, "Quota removal did not become visible", err)
+		addSettleWarning(&resp.Diagnostics, "Quota removal not visible yet", quotaErrorMessage(err))
 	}
 }
 
@@ -475,8 +482,7 @@ func (r *quotaResource) settle(ctx context.Context, entity kafkaclient.QuotaEnti
 	}
 	_, err := observeQuota(ctx, r.client, entity, exp, r.interval, timeout)
 	if errors.Is(err, context.DeadlineExceeded) {
-		return fmt.Errorf("timed out after %s waiting for the broker to report the change; "+
-			"the change was accepted, so run terraform plan again to refresh the actual state: %w", timeout, err)
+		return fmt.Errorf("timed out after %s waiting for the broker to report the change: %w", timeout, err)
 	}
 	return err
 }
@@ -556,18 +562,6 @@ func quotaErrorMessage(err error) string {
 			"Grant it DESCRIBE_CONFIGS and ALTER_CONFIGS on the cluster resource. Details: " + err.Error()
 	}
 	return err.Error()
-}
-
-// addQuotaSettleDiagnostic reports a failed wait after the broker accepted a
-// change. A wait that ran out of time is a warning: the change is done and the
-// next refresh shows what the broker reports. Any other error is an error,
-// for example a refused describe, because it can need action from the user.
-func addQuotaSettleDiagnostic(diags *diag.Diagnostics, summary string, err error) {
-	if errors.Is(err, context.DeadlineExceeded) {
-		diags.AddWarning(summary, quotaErrorMessage(err))
-		return
-	}
-	addQuotaError(diags, summary, err)
 }
 
 func addQuotaError(diags *diag.Diagnostics, summary string, err error) {

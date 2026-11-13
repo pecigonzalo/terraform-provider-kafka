@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -54,8 +55,8 @@ type PartitionReassignment struct {
 // It returns errors wrapping [ErrTopicNotFound], [ErrInvalidPartitions] or
 // [ErrInvalidReplicaAssignment] for the matching broker rejections.
 //
-// kafka-go provides CreatePartitions, so this wraps it and adds argument
-// validation, a check of the per-topic result and error classification.
+// The call checks the arguments before it sends the request. It then checks the
+// result for the topic, and it returns an error when the broker gives none.
 func (c *Client) CreatePartitions(ctx context.Context, topic string, total int, replicas [][]int) error {
 	if err := validateCreatePartitions(topic, total, replicas); err != nil {
 		return fmt.Errorf("create partitions of topic %q: %w", topic, err)
@@ -79,14 +80,7 @@ func (c *Client) CreatePartitions(ctx context.Context, topic string, total int, 
 	if err != nil {
 		return fmt.Errorf("create partitions of topic %q: %w", topic, err)
 	}
-	topicErr, ok := resp.Errors[topic]
-	if !ok {
-		return fmt.Errorf("create partitions of topic %q: the broker returned no result for the topic", topic)
-	}
-	if topicErr != nil {
-		return fmt.Errorf("create partitions of topic %q: %w", topic, classifyPartitionError(topicErr))
-	}
-	return nil
+	return checkResults("create partitions of topic", []string{topic}, resp.Errors)
 }
 
 func validateCreatePartitions(topic string, total int, replicas [][]int) error {
@@ -151,6 +145,9 @@ func (c *Client) AlterPartitionReassignments(ctx context.Context, topic string, 
 	reqAssignments := make([]kafka.AlterPartitionReassignmentsRequestAssignment, len(assignments))
 	seen := make(map[int]bool, len(assignments))
 	for i, a := range assignments {
+		if a.Partition < 0 {
+			return fmt.Errorf("alter partition reassignments of topic %q: partition number %d is negative", topic, a.Partition)
+		}
 		if seen[a.Partition] {
 			return fmt.Errorf("alter partition reassignments of topic %q: partition %d appears more than once", topic, a.Partition)
 		}
@@ -172,17 +169,15 @@ func (c *Client) AlterPartitionReassignments(ctx context.Context, topic string, 
 	if err != nil {
 		return fmt.Errorf("alter partition reassignments of topic %q: %w", topic, err)
 	}
-	var errs []error
 	if resp.Error != nil {
-		errs = append(errs, classifyPartitionError(resp.Error))
+		return fmt.Errorf("alter partition reassignments of topic %q: %w", topic, classifyBrokerError(resp.Error))
 	}
+	results := make(map[string]error, len(resp.PartitionResults))
 	for _, pr := range resp.PartitionResults {
-		if pr.Error != nil {
-			errs = append(errs, fmt.Errorf("partition %d: %w", pr.PartitionID, classifyPartitionError(pr.Error)))
-		}
+		results[strconv.Itoa(pr.PartitionID)] = pr.Error
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("alter partition reassignments of topic %q: %w", topic, errors.Join(errs...))
+	if err := checkResults("partition", nil, results); err != nil {
+		return fmt.Errorf("alter partition reassignments of topic %q: %w", topic, err)
 	}
 	return nil
 }
@@ -210,7 +205,7 @@ func (r *Reader) ListPartitionReassignments(ctx context.Context, topic string, p
 		return nil, fmt.Errorf("list partition reassignments of topic %q: %w", topic, err)
 	}
 	if resp.Error != nil {
-		return nil, fmt.Errorf("list partition reassignments of topic %q: %w", topic, classifyPartitionError(resp.Error))
+		return nil, fmt.Errorf("list partition reassignments of topic %q: %w", topic, classifyBrokerError(resp.Error))
 	}
 	var out []PartitionReassignment
 	for _, p := range resp.Topics[topic].Partitions {
@@ -237,18 +232,4 @@ func (r *Reader) requestTimeout() time.Duration {
 		return max(t/2, minRequestTimeout)
 	}
 	return defaultRequestTimeout
-}
-
-// classifyPartitionError adds the package's sentinel errors to the matching
-// broker error codes while keeping the original error in the chain.
-func classifyPartitionError(err error) error {
-	switch {
-	case errors.Is(err, kafka.UnknownTopicOrPartition):
-		return fmt.Errorf("%w: %w", ErrTopicNotFound, err)
-	case errors.Is(err, kafka.InvalidPartitionNumber):
-		return fmt.Errorf("%w: %w", ErrInvalidPartitions, err)
-	case errors.Is(err, kafka.InvalidReplicaAssignment):
-		return fmt.Errorf("%w: %w", ErrInvalidReplicaAssignment, err)
-	}
-	return err
 }

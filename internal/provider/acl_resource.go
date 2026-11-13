@@ -187,9 +187,14 @@ func (r *aclResource) Configure(_ context.Context, req resource.ConfigureRequest
 		return
 	}
 	// A nil *Client must not become a non-nil interface.
-	if client != nil {
-		r.client = client
+	if client == nil {
+		return
 	}
+	if client.Reader == nil {
+		resp.Diagnostics.AddError("Missing Kafka client", "The provider supplied a Kafka client that is not connected. Please report this issue to the provider developers.")
+		return
+	}
+	r.client = client
 }
 
 // ValidateConfig applies the cross-attribute rules Kafka enforces (for
@@ -302,16 +307,7 @@ func (r *aclResource) ImportState(ctx context.Context, req resource.ImportStateR
 		resp.Diagnostics.AddError("Invalid ACL import id", err.Error())
 		return
 	}
-	data := ACLResourceModel{
-		ID:                  types.StringValue(encodeACLID(acl)),
-		ResourceType:        types.StringValue(string(acl.ResourceType)),
-		ResourceName:        types.StringValue(acl.ResourceName),
-		ResourcePatternType: types.StringValue(string(acl.PatternType)),
-		Principal:           types.StringValue(acl.Principal),
-		Host:                types.StringValue(acl.Host),
-		Operation:           types.StringValue(string(acl.Operation)),
-		PermissionType:      types.StringValue(string(acl.PermissionType)),
-	}
+	data := aclToModel(acl)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), data.ID)...)
 }
@@ -336,6 +332,20 @@ func (m ACLResourceModel) acl() (acl kafkaclient.ACL, known bool) {
 		Operation:      kafkaclient.ACLOperation(m.Operation.ValueString()),
 		PermissionType: kafkaclient.ACLPermissionType(m.PermissionType.ValueString()),
 	}, known
+}
+
+// aclToModel converts an ACL to the model, including its id.
+func aclToModel(acl kafkaclient.ACL) ACLResourceModel {
+	return ACLResourceModel{
+		ID:                  types.StringValue(encodeACLID(acl)),
+		ResourceType:        types.StringValue(string(acl.ResourceType)),
+		ResourceName:        types.StringValue(acl.ResourceName),
+		ResourcePatternType: types.StringValue(string(acl.PatternType)),
+		Principal:           types.StringValue(acl.Principal),
+		Host:                types.StringValue(acl.Host),
+		Operation:           types.StringValue(string(acl.Operation)),
+		PermissionType:      types.StringValue(string(acl.PermissionType)),
+	}
 }
 
 // exactACLFilter returns a filter that matches only the given ACL.
@@ -399,15 +409,13 @@ func addACLError(diags *diag.Diagnostics, summary string, err error) {
 // aclAccess says what a caller does with ACLs, which decides the advice given
 // when the broker refuses it.
 type aclAccess struct {
-	subject   string // resource or data source name, for example "kafka_acl"
 	verb      string // "manage" or "read"
-	passive   string // "managed" or "read"
 	operation string // cluster operation the principal needs
 }
 
 var (
-	aclManageAccess = aclAccess{subject: "kafka_acl", verb: "manage", passive: "managed", operation: "Alter"}
-	aclReadAccess   = aclAccess{subject: "kafka_acls", verb: "read", passive: "read", operation: "Describe"}
+	aclManageAccess = aclAccess{verb: "manage", operation: "Alter"}
+	aclReadAccess   = aclAccess{verb: "read", operation: "Describe"}
 )
 
 // aclErrorDetail maps the kafkaclient sentinel errors to actionable advice for
@@ -420,8 +428,8 @@ func aclErrorDetail(err error) string {
 func aclErrorDetailFor(access aclAccess, err error) string {
 	switch {
 	case errors.Is(err, kafkaclient.ErrSecurityDisabled):
-		return "The broker has no authorizer configured, so ACLs cannot be " + access.passive + ". " +
-			"Enable one (for example `authorizer.class.name` on the brokers) before using " + access.subject + ".\n\n" +
+		return "The broker has no authorizer configured, so you cannot " + access.verb + " ACLs. " +
+			"Enable one (for example `authorizer.class.name` on the brokers) first.\n\n" +
 			"Error: " + err.Error()
 	case errors.Is(err, kafkaclient.ErrNotAuthorized):
 		return "The provider's principal is not authorized to " + access.verb + " ACLs. " +

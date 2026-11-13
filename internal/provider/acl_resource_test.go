@@ -182,11 +182,20 @@ func TestACLErrorDetail(t *testing.T) {
 
 func TestACLResourceConfigure(t *testing.T) {
 	t.Run("accepts_client", func(t *testing.T) {
+		client, err := kafkaclient.New(t.Context(), kafkaclient.Config{BootstrapServer: "localhost:9092", Timeout: time.Second})
+		require.NoError(t, err)
+		r := &aclResource{}
+		resp := &fwresource.ConfigureResponse{}
+		r.Configure(t.Context(), fwresource.ConfigureRequest{ProviderData: client}, resp)
+		assert.False(t, resp.Diagnostics.HasError())
+		assert.NotNil(t, r.client)
+	})
+	t.Run("rejects_client_without_connection", func(t *testing.T) {
 		r := &aclResource{}
 		resp := &fwresource.ConfigureResponse{}
 		r.Configure(t.Context(), fwresource.ConfigureRequest{ProviderData: &kafkaclient.Client{}}, resp)
-		assert.False(t, resp.Diagnostics.HasError())
-		assert.NotNil(t, r.client)
+		assert.True(t, resp.Diagnostics.HasError())
+		assert.Nil(t, r.client)
 	})
 	t.Run("rejects_other_types", func(t *testing.T) {
 		r := &aclResource{}
@@ -353,7 +362,7 @@ func TestACLSettleTimeout(t *testing.T) {
 // aclModelObject builds the object value of the resource model for acl.
 func aclModelObject(t *testing.T, r *aclResource, acl kafkaclient.ACL) tftypes.Value {
 	t.Helper()
-	return tftypes.NewValue(aclTFType(t, r), map[string]tftypes.Value{
+	return tftypes.NewValue(aclSchema(t, r).Type().TerraformType(t.Context()), map[string]tftypes.Value{
 		"id":                    tftypes.NewValue(tftypes.String, encodeACLID(acl)),
 		"resource_type":         tftypes.NewValue(tftypes.String, string(acl.ResourceType)),
 		"resource_name":         tftypes.NewValue(tftypes.String, acl.ResourceName),
@@ -363,13 +372,6 @@ func aclModelObject(t *testing.T, r *aclResource, acl kafkaclient.ACL) tftypes.V
 		"operation":             tftypes.NewValue(tftypes.String, string(acl.Operation)),
 		"permission_type":       tftypes.NewValue(tftypes.String, string(acl.PermissionType)),
 	})
-}
-
-func aclTFType(t *testing.T, r *aclResource) tftypes.Type {
-	t.Helper()
-	resp := &fwresource.SchemaResponse{}
-	r.Schema(t.Context(), fwresource.SchemaRequest{}, resp)
-	return resp.Schema.Type().TerraformType(t.Context())
 }
 
 func aclSchema(t *testing.T, r *aclResource) fwresourceschema.Schema {

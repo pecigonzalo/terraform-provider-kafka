@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -81,7 +82,8 @@ func (d *aclsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 					"With the `literal` pattern type, the name must be the same. " +
 					"ACLs for the `*` name are only in the result if you set `*`. " +
 					"With the `match` pattern type, the result also has the wildcard and prefixed ACLs that apply to the name.",
-				Optional: true,
+				Optional:   true,
+				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
 			},
 			"resource_pattern_type": schema.StringAttribute{
 				MarkdownDescription: "The kind of ACL that `resource_name` selects. " +
@@ -97,12 +99,14 @@ func (d *aclsDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 			"principal": schema.StringAttribute{
 				MarkdownDescription: "Return only ACLs for this principal, as `Type:name`, for example `User:alice`. " +
 					"The principal must be the same. `User:*` returns only ACLs for all users.",
-				Optional: true,
+				Optional:   true,
+				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
 			},
 			"host": schema.StringAttribute{
 				MarkdownDescription: "Return only ACLs for this host. " +
 					"The host must be the same. `*` returns only ACLs for all hosts.",
-				Optional: true,
+				Optional:   true,
+				Validators: []validator.String{stringvalidator.LengthAtLeast(1)},
 			},
 			"operation": schema.StringAttribute{
 				MarkdownDescription: "Return only ACLs for this operation: `any` or " + enumDocs(aclOperations) +
@@ -182,18 +186,16 @@ func (d *aclsDataSource) Configure(_ context.Context, req datasource.ConfigureRe
 }
 
 // ValidateConfig rejects filters whose fields cannot match the same ACL, so
-// the mistake shows at plan time. Filters with values that are not known yet
-// are not checked.
+// the mistake shows at plan time.
 func (d *aclsDataSource) ValidateConfig(ctx context.Context, req datasource.ValidateConfigRequest, resp *datasource.ValidateConfigResponse) {
 	var data aclsDataSourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	filter, known := data.filter()
-	if !known {
-		return
-	}
+	// Values that are not known yet count as unset, so the known ones are
+	// still checked.
+	filter := data.filter()
 	if err := filter.CheckConsistency(); err != nil {
 		resp.Diagnostics.AddError("Invalid ACL filter", err.Error())
 	}
@@ -209,13 +211,13 @@ func (d *aclsDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		resp.Diagnostics.AddError("Missing Kafka client", "The provider did not supply a Kafka client. Please report this issue to the provider developers.")
 		return
 	}
-	filter, _ := data.filter()
+	filter := data.filter()
 	if err := filter.CheckConsistency(); err != nil {
 		resp.Diagnostics.AddError("Invalid ACL filter", err.Error())
 		return
 	}
 
-	tflog.Debug(ctx, "Reading ACLs", map[string]any{"filter": data.ID})
+	tflog.Debug(ctx, "Reading ACLs", map[string]any{"filter": aclsFilterID(filter)})
 	found, err := d.client.DescribeACLs(ctx, filter)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to read ACLs", aclErrorDetailFor(aclReadAccess, err))
@@ -227,12 +229,9 @@ func (d *aclsDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
-// filter converts the configured filters to a kafkaclient.ACLFilter. known is
-// false when any filter is unknown, in which case the filter is incomplete.
-// Unset filters are left empty, which means "any".
-func (m aclsDataSourceModel) filter() (filter kafkaclient.ACLFilter, known bool) {
-	attrs := []types.String{m.ResourceType, m.ResourceName, m.ResourcePatternType, m.Principal, m.Host, m.Operation, m.PermissionType}
-	known = !slices.ContainsFunc(attrs, types.String.IsUnknown)
+// filter converts the configured filters to a kafkaclient.ACLFilter. Filters
+// that are unset or unknown are left empty, which means "any".
+func (m aclsDataSourceModel) filter() kafkaclient.ACLFilter {
 	return kafkaclient.ACLFilter{
 		ResourceType:   kafkaclient.ACLResourceType(m.ResourceType.ValueString()),
 		ResourceName:   m.ResourceName.ValueString(),
@@ -241,7 +240,7 @@ func (m aclsDataSourceModel) filter() (filter kafkaclient.ACLFilter, known bool)
 		Host:           m.Host.ValueString(),
 		Operation:      kafkaclient.ACLOperation(m.Operation.ValueString()),
 		PermissionType: kafkaclient.ACLPermissionType(m.PermissionType.ValueString()),
-	}, known
+	}
 }
 
 // aclModels converts ACLs to their model, sorted by id so the result is the
@@ -250,16 +249,7 @@ func (m aclsDataSourceModel) filter() (filter kafkaclient.ACLFilter, known bool)
 func aclModels(acls []kafkaclient.ACL) []ACLResourceModel {
 	models := make([]ACLResourceModel, 0, len(acls))
 	for _, acl := range acls {
-		models = append(models, ACLResourceModel{
-			ID:                  types.StringValue(encodeACLID(acl)),
-			ResourceType:        types.StringValue(string(acl.ResourceType)),
-			ResourceName:        types.StringValue(acl.ResourceName),
-			ResourcePatternType: types.StringValue(string(acl.PatternType)),
-			Principal:           types.StringValue(acl.Principal),
-			Host:                types.StringValue(acl.Host),
-			Operation:           types.StringValue(string(acl.Operation)),
-			PermissionType:      types.StringValue(string(acl.PermissionType)),
-		})
+		models = append(models, aclToModel(acl))
 	}
 	slices.SortFunc(models, func(a, b ACLResourceModel) int {
 		return strings.Compare(a.ID.ValueString(), b.ID.ValueString())

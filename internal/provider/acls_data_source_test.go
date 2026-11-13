@@ -86,6 +86,9 @@ func TestACLsDataSourceValidateConfig(t *testing.T) {
 			"resource_type": strPtr("any"), "resource_pattern_type": strPtr("any"), "operation": strPtr("any"), "permission_type": strPtr("any"),
 		}, ""},
 		{"unknown_values_are_not_checked", map[string]*string{"resource_type": strPtr("group"), "operation": nil}, ""},
+		{"known_fields_are_checked_when_another_is_unknown", map[string]*string{
+			"resource_type": strPtr("group"), "operation": strPtr("write"), "resource_name": nil,
+		}, "not valid for resource type"},
 		{"unknown_enum_value", map[string]*string{"operation": strPtr("poke")}, "unknown operation"},
 		{"operation_not_valid_for_type", map[string]*string{"resource_type": strPtr("group"), "operation": strPtr("write")}, "not valid for resource type"},
 		{"cluster_with_other_name", map[string]*string{"resource_type": strPtr("cluster"), "resource_name": strPtr("x")}, "must be"},
@@ -132,6 +135,11 @@ func TestACLsDataSourceAttributeValidators(t *testing.T) {
 		{"operation", "poke", "unknown operation"},
 		{"permission_type", "any", ""},
 		{"permission_type", "maybe", "unknown permission type"},
+		{"principal", "", "at least 1"},
+		{"principal", "User:alice", ""},
+		{"resource_name", "", "at least 1"},
+		{"host", "", "at least 1"},
+		{"host", "*", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.attr+"_"+tc.value, func(t *testing.T) {
@@ -259,7 +267,7 @@ func TestACLsDataSourceReadErrors(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"no_authorizer", fmt.Errorf("describe ACLs: %w", kafkaclient.ErrSecurityDisabled), "no authorizer configured, so ACLs cannot be read"},
+		{"no_authorizer", fmt.Errorf("describe ACLs: %w", kafkaclient.ErrSecurityDisabled), "you cannot read ACLs"},
 		{"not_authorized", fmt.Errorf("describe ACLs: %w", kafkaclient.ErrNotAuthorized), "Describe operation on the cluster"},
 		{"other", errors.New("boom"), "boom"},
 	}
@@ -287,9 +295,8 @@ func TestACLErrorDetailSharedMapping(t *testing.T) {
 	assert.Equal(t, aclErrorDetailFor(aclManageAccess, err), aclErrorDetail(err))
 
 	err = fmt.Errorf("x: %w", kafkaclient.ErrSecurityDisabled)
-	assert.Contains(t, aclErrorDetailFor(aclManageAccess, err), "cannot be managed")
-	assert.Contains(t, aclErrorDetailFor(aclReadAccess, err), "cannot be read")
-	assert.Contains(t, aclErrorDetailFor(aclReadAccess, err), "before using kafka_acls")
+	assert.Contains(t, aclErrorDetailFor(aclManageAccess, err), "you cannot manage ACLs")
+	assert.Contains(t, aclErrorDetailFor(aclReadAccess, err), "you cannot read ACLs")
 }
 
 func TestACLsFilterID(t *testing.T) {

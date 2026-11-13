@@ -126,3 +126,7 @@ Mongey's provider while supporting many features is powered by [sarama](https://
 > **Does it support Zookeeper admin actions?**
 
 Not at this time. Given Kafka migration to KRaft and easy of use of the broker based admin API, I would rather focus on those for now.
+
+## License
+
+This project uses the MIT license. Read the [LICENSE](LICENSE) file.

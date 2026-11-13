@@ -17,7 +17,7 @@ BREAKING CHANGES:
 
 UPGRADE NOTES:
 
-* resource/`kafka_topic`: Run `terraform plan` after you upgrade. Read the plan before you apply it. If you do not set `configuration`, the plan changes `configuration` to null. If you set some keys, the plan removes the other keys from state. When you apply, the provider sends only the keys that you set. Kafka then resets all other topic settings to the broker defaults. This includes settings that you or another tool set outside Terraform. To keep a setting, add it to `configuration` before you apply. (#154, #176)
+* resource/`kafka_topic`: Run `terraform plan` after you upgrade. Read the plan before you apply it. If you do not set `configuration`, the plan changes `configuration` to null. If you set some keys, the plan removes the other keys from state. When you change `configuration`, the provider now sets the keys that you manage and deletes the keys that you removed. It does not change any other setting. In v0.5.3, state held all broker settings. For this reason, the first change after the upgrade deletes every key that was in the old state and is not in your `configuration`. For a key at the broker default, this changes nothing. A setting that is not at the default and was in the old state returns to the broker default. To keep such a setting, add it to `configuration` before you apply. Settings that you or another tool set after the upgrade are not changed. (#154, #176, #194)
 
 FEATURES:
 
@@ -27,12 +27,17 @@ FEATURES:
 
 ENHANCEMENTS:
 
+* resource/`kafka_topic`: A change to `configuration` now uses incremental alter. Kafka 2.3 or later is necessary. The provider sets the keys that you manage and deletes the keys that you removed. It does not change a setting that is not in `configuration`. If the broker is older, the error names Kafka 2.3. (#194)
 * resource/`kafka_topic`: When you change `replication_factor`, apply now waits until Kafka finishes the change. If this takes longer than the provider `timeout`, the error tells you to run `terraform plan`. (#161)
 * resource/`kafka_topic`: When you change `partitions` or `replication_factor`, the provider reads the current topic state from the broker. In v0.5.3, it could use old Terraform state. (#153, #181)
 * resource/`kafka_topic`: When more than one topic fails to create, delete or change, the error now lists all of them. Before, it showed only the first. (#157)
 
 BUG FIXES:
 
+* resource/`kafka_topic`: A change to `configuration` no longer resets the settings that are not in `configuration`. Before, it returned them to the broker default, but the documentation said it did not. (#194)
+* resource/`kafka_topic`: When a change to `configuration`, `replication_factor` or `partitions` fails after an earlier part of the same change worked, the provider now saves the part that worked to state. Before, state kept the old values. (#194)
+* resource/`kafka_topic`: When you change `replication_factor` and the replicas already show the new count, for example after a timed-out apply, apply now waits until Kafka finishes the reassignment. Before, it ended at once. (#194)
+* resource/`kafka_topic`: A change to `partitions` or `replication_factor` right after the topic was created no longer fails with `topic not found`. The provider now reads the topic again for a short time first. (#194)
 * resource/`kafka_topic`: The provider now shows an error when a change to the replicas of a topic fails. In v0.5.3, it ignored the error. (#153)
 * resource/`kafka_topic`: Delete no longer stops with a panic. Delete succeeds if the topic is already gone. (#153)
 * resource/`kafka_topic`: The provider now converts `configuration` values with typed entries. Before, it removed quotes from the text of the value. The provider skips null and unknown values. (#153)
@@ -50,6 +55,7 @@ NOTES:
 * provider: The provider keeps cluster information for 2 seconds at most. Reads see new topic changes sooner. The provider sends a little more requests to the brokers. (#173)
 * data source/`kafka_topic`: The data source uses the new client. `version` is still `0`, as before. (#173)
 * provider: The build now uses Go 1.27.4. Go 1.25 is at its end of life and has no more security fixes. To build the provider from source, you now need Go 1.27 or later. This does not change the released files. This version also has fixes for known vulnerabilities, and the dependencies `golang.org/x/net` and `github.com/klauspost/compress` have new versions with fixes. (#190)
+* The project now has a `LICENSE` file with the MIT license. Before this, the repository had no license file. (#192)
 
 ## 0.5.3 (2026-07-15)
 

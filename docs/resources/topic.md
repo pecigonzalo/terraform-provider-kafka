@@ -34,7 +34,7 @@ resource "kafka_topic" "example" {
 
 ### Optional
 
-- `configuration` (Map of String) Topic configuration overrides. Only the keys set here are managed; any other topic configuration is left at the broker default.
+- `configuration` (Map of String) Topic configuration overrides. Terraform manages only the keys set here. When you change this map, Terraform sets the keys in it and removes the keys that you took out, so those settings return to the broker default. Terraform does not change any other topic setting, so a setting made outside Terraform stays as it is and does not show as a difference. Changing this map needs Kafka 2.3 or later.
 
 ### Read-Only
 

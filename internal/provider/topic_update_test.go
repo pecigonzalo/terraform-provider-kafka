@@ -32,6 +32,13 @@ type fakeTopicOps struct {
 	alterErr  error
 	createErr error
 
+	// configErr is returned by AlterTopicConfig. configCalls counts the calls
+	// and configPrevious and configNew hold the arguments of the last one.
+	configErr      error
+	configCalls    int
+	configPrevious map[string]string
+	configNew      map[string]string
+
 	altered      []kafkaclient.PartitionAssignment
 	created      [][]int
 	createdTotal int
@@ -82,6 +89,12 @@ func (f *fakeTopicOps) ListPartitionReassignments(context.Context, string, ...in
 	return f.listFn(f.listCalls)
 }
 
+func (f *fakeTopicOps) AlterTopicConfig(_ context.Context, _ string, previous, config map[string]string) error {
+	f.configCalls++
+	f.configPrevious, f.configNew = previous, config
+	return f.configErr
+}
+
 func (f *fakeTopicOps) Timeout() time.Duration { return f.timeout }
 
 func fakeBrokers(ids ...int) []kafkaclient.BrokerInfo {
@@ -106,6 +119,8 @@ func testUpdater(f *fakeTopicOps) *topicUpdater {
 	u := newTopicUpdater(f)
 	u.reassignmentInterval = time.Millisecond
 	u.partitionInterval = time.Millisecond
+	u.settleInterval = time.Millisecond
+	u.settleWindow = 20 * time.Millisecond
 	return u
 }
 

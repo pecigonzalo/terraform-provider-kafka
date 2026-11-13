@@ -65,39 +65,80 @@ func (c *Client) DeleteTopics(ctx context.Context, names ...string) error {
 	})
 }
 
-// AlterTopicConfig sets the topic's configuration overrides to config. The
-// call replaces the whole set of overrides (the broker's non-incremental
-// AlterConfigs): keys left out of config go back to the broker default.
+// ErrIncrementalAlterUnsupported means the broker does not offer incremental
+// alter of configuration, which needs Kafka 2.3 or later.
+var ErrIncrementalAlterUnsupported = errors.New(
+	"the broker does not support incremental alter of configuration; this needs Kafka 2.3 or later")
+
+// AlterTopicConfig changes only the configuration keys that Terraform manages.
+// It sets every key in config. It deletes every key that is in previous and not
+// in config, so that setting returns to the broker default. It does not touch
+// any other key, so a setting made outside Terraform stays as it is. The call
+// uses the incremental alter API (Kafka 2.3 or later) and sends nothing when
+// there is no change.
 //
 // Failures reported per resource are returned too. A topic that does not
-// exist yields an error wrapping [ErrTopicNotFound].
-func (c *Client) AlterTopicConfig(ctx context.Context, name string, config map[string]string) error {
-	configs := make([]kafka.AlterConfigRequestConfig, 0, len(config))
-	for _, e := range configEntries(config) {
-		configs = append(configs, kafka.AlterConfigRequestConfig{Name: e.ConfigName, Value: e.ConfigValue})
+// exist yields an error wrapping [ErrTopicNotFound]. A broker without the API
+// yields an error wrapping [ErrIncrementalAlterUnsupported].
+func (c *Client) AlterTopicConfig(ctx context.Context, name string, previous, config map[string]string) error {
+	configs := incrementalConfigs(previous, config)
+	if len(configs) == 0 {
+		return nil
 	}
-	resp, err := c.kc.AlterConfigs(ctx, &kafka.AlterConfigsRequest{
-		Resources: []kafka.AlterConfigRequestResource{{
+	resp, err := c.kc.IncrementalAlterConfigs(ctx, &kafka.IncrementalAlterConfigsRequest{
+		Resources: []kafka.IncrementalAlterConfigsRequestResource{{
 			ResourceType: kafka.ResourceTypeTopic,
 			ResourceName: name,
 			Configs:      configs,
 		}},
 	})
 	if err != nil {
-		return fmt.Errorf("alter config of topic %q: %w", name, err)
+		return fmt.Errorf("alter config of topic %q: %w", name, classifyAlterError(err))
 	}
-	errs := make(map[string]error, len(resp.Errors))
-	for res, err := range resp.Errors {
-		if err != nil {
-			errs[res.Name] = err
+	errs := make(map[string]error, len(resp.Resources))
+	for _, res := range resp.Resources {
+		if res.Error != nil {
+			errs[res.ResourceName] = res.Error
 		}
 	}
 	return joinResponseErrors(errs, "alter config of topic", func(err error) error {
-		if errors.Is(err, kafka.UnknownTopicOrPartition) {
+		switch {
+		case errors.Is(err, kafka.UnknownTopicOrPartition):
 			return ErrTopicNotFound
+		case errors.Is(err, kafka.UnsupportedVersion):
+			return ErrIncrementalAlterUnsupported
 		}
 		return nil
 	})
+}
+
+// classifyAlterError adds [ErrIncrementalAlterUnsupported] to the chain of an
+// unsupported-version error. Other errors are returned as they are.
+func classifyAlterError(err error) error {
+	if errors.Is(err, kafka.UnsupportedVersion) {
+		return fmt.Errorf("%w: %w", ErrIncrementalAlterUnsupported, err)
+	}
+	return err
+}
+
+// incrementalConfigs builds the operations for AlterTopicConfig: a set for
+// every key in config, then a delete for every key that is only in previous.
+// Each group is ordered by key so requests are deterministic.
+func incrementalConfigs(previous, config map[string]string) []kafka.IncrementalAlterConfigsRequestConfig {
+	configs := make([]kafka.IncrementalAlterConfigsRequestConfig, 0, len(config))
+	for _, k := range slices.Sorted(maps.Keys(config)) {
+		configs = append(configs, kafka.IncrementalAlterConfigsRequestConfig{
+			Name: k, Value: config[k], ConfigOperation: kafka.ConfigOperationSet,
+		})
+	}
+	for _, k := range slices.Sorted(maps.Keys(previous)) {
+		if _, kept := config[k]; !kept {
+			configs = append(configs, kafka.IncrementalAlterConfigsRequestConfig{
+				Name: k, ConfigOperation: kafka.ConfigOperationDelete,
+			})
+		}
+	}
+	return configs
 }
 
 // configEntries converts a config map to kafka-go entries, ordered by key so

@@ -140,6 +140,6 @@ jobs:
           terraform_wrapper: false
       - run: go mod download
       - env:
-          TESTARGS: "-cover"
+          TESTARGS: "-cover -race"
         run: make testacc
         timeout-minutes: 10

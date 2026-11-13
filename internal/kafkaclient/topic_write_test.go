@@ -18,16 +18,16 @@ import (
 // topicWriteRoundTripper serves canned CreateTopics, DeleteTopics and
 // AlterConfigs responses and records the requests it receives.
 type topicWriteRoundTripper struct {
-	err     error
-	create  *createtopics.Response
-	delete  *deletetopics.Response
-	alter   *alterconfigs.Response
+	err    error
+	create *createtopics.Response
+	delete *deletetopics.Response
+	alter  *alterconfigs.Response
 
 	incremental  *incrementalalterconfigs.Response
 	incrementals []*incrementalalterconfigs.Request
-	creates []*createtopics.Request
-	deletes []*deletetopics.Request
-	alters  []*alterconfigs.Request
+	creates      []*createtopics.Request
+	deletes      []*deletetopics.Request
+	alters       []*alterconfigs.Request
 }
 
 func (f *topicWriteRoundTripper) RoundTrip(_ context.Context, _ net.Addr, req kafka.Request) (kafka.Response, error) {

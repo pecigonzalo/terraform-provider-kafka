@@ -20,10 +20,10 @@ import (
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
 
-// secureProviderBlock renders a provider block that talks to the secured
-// cluster the way a user would configure it: TLS and SASL set explicitly in
-// the configuration, and the bootstrap address in the block, which takes
-// precedence over the KAFKA_BOOTSTRAP_SERVERS the other cluster exports.
+// secureProviderBlock returns a provider block for the secured cluster, as a
+// user writes it. It sets TLS, SASL and the bootstrap address in the block. The
+// block value has priority over the KAFKA_BOOTSTRAP_SERVERS variable that the
+// other cluster sets.
 func secureProviderBlock(alias, mechanism, user, password string, skipVerify bool) string {
 	aliasLine := ""
 	if alias != "" {
@@ -58,7 +58,7 @@ func secureName(t *testing.T, kind string) string {
 	return fmt.Sprintf("tf-acc-secure-%s-%s", kind, suffix)
 }
 
-// secureAdminTransport connects to the secured cluster as the super user.
+// secureAdminTransport returns a transport for the super user.
 func secureAdminTransport() *kafka.Transport {
 	return &kafka.Transport{
 		TLS:         &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}, //nolint:gosec // self-signed test certificate
@@ -67,7 +67,7 @@ func secureAdminTransport() *kafka.Transport {
 	}
 }
 
-// secureTopicExists reports whether the topic exists, as seen by the super user.
+// secureTopicExists reports if the super user sees the topic.
 func secureTopicExists(ctx context.Context, topic string) (bool, error) {
 	client := &kafka.Client{Addr: kafka.TCP(secureCluster.Address), Transport: secureAdminTransport(), Timeout: 10 * time.Second}
 	resp, err := client.Metadata(ctx, &kafka.MetadataRequest{Topics: []string{topic}})
@@ -82,7 +82,8 @@ func secureTopicExists(ctx context.Context, topic string) (bool, error) {
 	return false, nil
 }
 
-// secureWaitTopic polls until the topic's existence matches want, within 30s.
+// secureWaitTopic polls until the topic exists (or not) as want says. The limit
+// is 30 seconds.
 func secureWaitTopic(topic string, want bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -110,8 +111,8 @@ func secureCheckTopicAbsent(topic string) resource.TestCheckFunc {
 	}
 }
 
-// secureAdminClient is a kafkaclient connected to the secured cluster as the
-// super user, for inspecting ACLs and quotas.
+// secureAdminClient returns a client for the super user. Tests use it to read
+// ACLs and quotas.
 func secureAdminClient(t *testing.T) *kafkaclient.Client {
 	t.Helper()
 	client, err := kafkaclient.New(t.Context(), kafkaclient.Config{
@@ -125,10 +126,10 @@ func secureAdminClient(t *testing.T) *kafkaclient.Client {
 	return client
 }
 
-// TestAccSecureClusterAuthenticated connects with TLS (verification skipped
-// for the self-signed certificate) and each SASL mechanism as the super user,
-// reads an existing topic through the data source and creates and destroys a
-// topic.
+// TestAccSecureClusterAuthenticated connects as the super user with TLS and with
+// each SASL mechanism. It skips the certificate check because the certificate
+// is self-signed. For each mechanism, it reads a topic with the data source,
+// and it creates and destroys a topic.
 func TestAccSecureClusterAuthenticated(t *testing.T) {
 	requireSecureCluster(t)
 	for _, mechanism := range []string{"plain", "scram-sha256", "scram-sha512"} {
@@ -163,8 +164,8 @@ resource "kafka_topic" "test" {
 	}
 }
 
-// With verification on, the self-signed certificate is rejected and the
-// diagnostic says why.
+// With certificate verification on, the provider rejects the self-signed
+// certificate. The diagnostic gives the reason.
 func TestAccSecureClusterRejectsUntrustedCertificate(t *testing.T) {
 	requireSecureCluster(t)
 	resource.Test(t, resource.TestCase{
@@ -181,9 +182,10 @@ data "kafka_topic" "seed" {
 	})
 }
 
-// recordingT lets a test observe the failure of a resource.Test run, so it can
-// assert on the full diagnostic text, including that something is absent from
-// it. The ExpectError option can only match, not exclude.
+// recordingT records the failure messages of a resource.Test run. A test can
+// then check the full diagnostic text, also to show that a text is not in it.
+// The ExpectError option can only match text. It cannot show that text is
+// missing.
 type recordingT struct {
 	*testing.T
 	mu       sync.Mutex
@@ -212,8 +214,8 @@ func (r *recordingT) output() string {
 	return strings.Join(r.messages, "\n")
 }
 
-// runExpectingFailure runs tc and returns everything it reported as failed. It
-// fails t if tc passes.
+// runExpectingFailure runs tc and returns the failure messages. It fails t if
+// tc passes.
 func runExpectingFailure(t *testing.T, tc resource.TestCase) string {
 	t.Helper()
 	rec := &recordingT{T: t}
@@ -228,8 +230,8 @@ func runExpectingFailure(t *testing.T, tc resource.TestCase) string {
 	return out
 }
 
-// A wrong password fails with an authentication diagnostic, and the password
-// (wrong or right) appears nowhere in the diagnostic output.
+// A wrong password gives an authentication diagnostic. No password is in the
+// diagnostic text: not the wrong one, and not a correct one.
 func TestAccSecureClusterWrongPassword(t *testing.T) {
 	requireSecureCluster(t)
 	for _, mechanism := range []string{"plain", "scram-sha256", "scram-sha512"} {

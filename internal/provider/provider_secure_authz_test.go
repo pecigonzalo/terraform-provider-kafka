@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	kafka "github.com/segmentio/kafka-go"
@@ -22,9 +25,9 @@ func secureLimitedProvider(alias string) string {
 	return secureProviderBlock(alias, "scram-sha256", secureLimitedUser, secureCluster.LimitedPassword, true)
 }
 
-// secureCheckNoACLs fails unless the super user sees no ACL on the topic.
-// Brokers learn ACL changes asynchronously, so a single empty answer is not
-// proof; the check requires the answer to stay empty for the whole window.
+// secureCheckNoACLs fails if the super user sees an ACL on the topic. Brokers
+// learn ACL changes after a delay. One empty answer is not enough, so the
+// check polls for 3 seconds. It fails if any answer has an ACL.
 func secureCheckNoACLs(t *testing.T, topic string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		client := secureAdminClient(t)
@@ -49,7 +52,8 @@ func secureCheckNoACLs(t *testing.T, topic string) resource.TestCheckFunc {
 	}
 }
 
-// secureCheckNoQuota fails unless the super user sees no quota for the user.
+// secureCheckNoQuota fails if the super user sees a quota for the user. It
+// polls for 3 seconds, as secureCheckNoACLs does.
 func secureCheckNoQuota(t *testing.T, user string) resource.TestCheckFunc {
 	return func(*terraform.State) error {
 		client := secureAdminClient(t)
@@ -72,10 +76,10 @@ func secureCheckNoQuota(t *testing.T, user string) resource.TestCheckFunc {
 	}
 }
 
-// As a principal with no ACLs, creating an ACL, a quota or a topic fails with
-// the diagnostics the resources promise. Each case first checks that nothing
-// reached the cluster, then applies the same resource as the super user to show
-// that the failure left no state or cluster object behind to collide with.
+// A principal with no ACLs cannot create an ACL, a quota or a topic. Each
+// attempt fails with the diagnostic that the resource documents. Each case first
+// checks that the cluster has no new object. Then it creates the same resource
+// as the super user. This shows that the failure left no state or cluster object.
 func TestAccSecureClusterNotSuperUser(t *testing.T) {
 	requireSecureCluster(t)
 
@@ -162,8 +166,8 @@ resource "kafka_topic" "test" {
 	})
 }
 
-// Once the super user grants the ACLs, created in the same configuration with
-// the kafka_acl resource, the limited user can manage a topic.
+// The super user grants ACLs with the kafka_acl resource in the same
+// configuration. After that, the limited user can manage a topic.
 func TestAccSecureClusterGrantedACLs(t *testing.T) {
 	requireSecureCluster(t)
 	topic := secureName(t, "granted")
@@ -172,7 +176,6 @@ func TestAccSecureClusterGrantedACLs(t *testing.T) {
 	acl := func(name, operation string) string {
 		return fmt.Sprintf(`
 resource "kafka_acl" %[1]q {
-  provider        = kafka.admin
   resource_type   = "topic"
   resource_name   = %[2]q
   principal       = %[3]q
@@ -184,11 +187,18 @@ resource "kafka_acl" %[1]q {
 	grants := acl("create", "create") + acl("describe", "describe") +
 		acl("describe_configs", "describe_configs") + acl("delete", "delete") + acl("alter_configs", "alter_configs")
 
-	providers := secureProviderBlock("admin", "plain", secureAdminUser, secureCluster.AdminPassword, true) +
-		secureLimitedProvider("limited")
+	// The test harness uses one server for all configurations of one provider.
+	// The last configuration wins. So the limited user has its own provider name
+	// and its own server. A resource selects it with the provider argument.
+	factories := map[string]func() (tfprotov6.ProviderServer, error){
+		"kafka":        providerserver.NewProtocol6WithError(New("test")()),
+		"kafkalimited": providerserver.NewProtocol6WithError(New("test")()),
+	}
+	providers := secureAdminProvider("plain") +
+		strings.Replace(secureLimitedProvider(""), `provider "kafka"`, `provider "kafkalimited"`, 1)
 	topicCfg := fmt.Sprintf(`
 resource "kafka_topic" "test" {
-  provider           = kafka.limited
+  provider           = kafkalimited
   name               = %q
   partitions         = 1
   replication_factor = 1
@@ -201,11 +211,12 @@ resource "kafka_topic" "test" {
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
-		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		ProtoV6ProviderFactories: factories,
 		CheckDestroy:             resource.ComposeAggregateTestCheckFunc(secureCheckTopicAbsent(topic), secureCheckNoACLs(t, topic)),
 		Steps: []resource.TestStep{
-			// The grants alone first, so the wait for the brokers to enforce them
-			// happens between steps, bounded, and not as a fixed delay.
+			// Step 1 only creates the grants. The wait for the broker to use the
+			// grants is between the steps. It has a time limit and is not a fixed
+			// delay.
 			{
 				Config: providers + grants,
 				Check:  resource.TestCheckResourceAttr("kafka_acl.create", "principal", principal),
@@ -223,9 +234,9 @@ resource "kafka_topic" "test" {
 }
 
 // secureWaitDescribeAllowed waits until the broker lets the limited user
-// describe the topic, which is how the grant shows up on the broker serving the
-// request. A topic that does not exist yet answers "unknown topic" once the
-// user is allowed to ask, and "authorization failed" before.
+// describe the topic. This shows that the broker uses the grant. A topic that
+// does not exist gives "unknown topic" to an allowed user. Before the grant, the
+// answer is "authorization failed".
 func secureWaitDescribeAllowed(t *testing.T, topic string) {
 	t.Helper()
 	transport := secureAdminTransport()

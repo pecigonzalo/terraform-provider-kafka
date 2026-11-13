@@ -27,45 +27,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The secured cluster is a second, separate single-node Kafka that the
-// acceptance tests use for everything the PLAINTEXT cluster cannot show: TLS,
-// SASL (PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512) and a provider principal that
-// is not a super user.
+// The secured cluster is a second Kafka cluster with one node. The acceptance
+// tests use it to test what the PLAINTEXT cluster cannot test: TLS, SASL (PLAIN,
+// SCRAM-SHA-256 and SCRAM-SHA-512), and a provider principal that is not a
+// super user.
 //
-// Nothing is mounted from the host. The certificate, the broker properties
-// and the start script are generated in memory for each run and copied into
-// the container through the Docker API between creating and starting it, so
-// the setup behaves the same on Linux CI and on a Docker daemon that runs in a
-// VM and shares only part of the host file system. No key material is ever
-// written to the repository or the host.
+// The setup mounts nothing from the host. Each run makes the certificate, the
+// broker properties and the start script in memory. The test copies them into
+// the container with the Docker API, after it creates the container and before
+// it starts the container. This works on Linux CI. It also works when the
+// Docker daemon runs in a virtual machine that shares only some host
+// directories. The test never writes key material to the repository or to the
+// host.
 const (
 	secureNodeID = 1
 
-	// secureSeedTopic exists on the secured cluster before any test runs.
+	// secureSeedTopic exists on the secured cluster before the tests start.
 	secureSeedTopic = "secure.read.me"
 
 	secureAdminUser   = "admin"
 	secureLimitedUser = "limited"
 
-	// secureContainerDir is where the generated files live inside the
-	// container. /tmp is writable by the image's unprivileged user.
+	// secureContainerDir is the directory for the generated files in the
+	// container. The unprivileged user of the image can write to /tmp.
 	secureContainerDir = "/tmp/secure"
 
-	// secureContainerUID owns the generated files. It is the uid of the
+	// secureContainerUID owns the generated files. It is the user ID of the
 	// unprivileged user in the apache/kafka image.
 	secureContainerUID = 1000
 
 	secureReadyTimeout = 3 * time.Minute
 )
 
-// secureClusterInfo describes the running secured cluster. It is set from
-// TestMain before any test runs and is read-only afterwards. It is deliberately
-// a variable of this test package and not process environment, which the
-// provider would pick up as configuration.
+// secureClusterInfo describes the secured cluster. TestMain sets it before the
+// tests start. The tests only read it. It is a variable of this test package
+// and not an environment variable, because the provider reads environment
+// variables as configuration.
 type secureClusterInfo struct {
 	// Address is the host:port of the SASL_SSL listener.
 	Address string
-	// AdminPassword and LimitedPassword are random per run.
+	// AdminPassword and LimitedPassword are new random values for each run.
 	AdminPassword   string
 	LimitedPassword string
 
@@ -78,10 +79,10 @@ type secureClusterInfo struct {
 // secureCluster is nil unless the acceptance tests are running.
 var secureCluster *secureClusterInfo
 
-// startSecureCluster creates and starts the secured broker and returns without
-// waiting for it to accept connections, so it boots while the PLAINTEXT cluster
-// does. Tests call [requireSecureCluster] to wait for readiness. The caller
-// must call [secureClusterInfo.stop].
+// startSecureCluster creates and starts the secured broker. It does not wait
+// until the broker accepts connections. The broker starts at the same time as
+// the PLAINTEXT cluster. A test that needs the broker calls
+// [requireSecureCluster]. The caller must call [secureClusterInfo.stop].
 func startSecureCluster(pool *dockertest.Pool, suffix string) (*secureClusterInfo, error) {
 	const image, tag = "docker.io/apache/kafka", "3.9.1"
 
@@ -112,8 +113,9 @@ func startSecureCluster(pool *dockertest.Pool, suffix string) (*secureClusterInf
 		Name: "terraform-provider-kafka-secure-" + suffix,
 		Config: &docker.Config{
 			Image: image + ":" + tag,
-			// Replace the image's entrypoint: formatting the storage with SCRAM
-			// credentials needs a command line the stock one does not offer.
+			// Replace the entrypoint of the image. The storage format command
+			// must add the SCRAM credentials, and the default entrypoint does
+			// not do this.
 			Entrypoint:   []string{"/bin/sh", secureContainerDir + "/start.sh"},
 			ExposedPorts: map[docker.Port]struct{}{docker.Port(hostPort + "/tcp"): {}},
 		},
@@ -139,12 +141,13 @@ func startSecureCluster(pool *dockertest.Pool, suffix string) (*secureClusterInf
 		info.stop(pool)
 		return nil, fmt.Errorf("start secured broker: %w", err)
 	}
-	// Kill a container that outlives its test run, as the main cluster does.
+	// Kill the container if it lives longer than the test run, as for the main
+	// cluster.
 	time.AfterFunc(orphanExpirySeconds*time.Second, func() { _ = pool.Client.KillContainer(docker.KillContainerOptions{ID: container.ID}) })
 	return info, nil
 }
 
-// stop removes the container. It is safe to call on a partially started cluster.
+// stop removes the container. You can call it after a failed start.
 func (c *secureClusterInfo) stop(pool *dockertest.Pool) {
 	if c == nil || c.container == nil {
 		return
@@ -172,9 +175,9 @@ func randomSecret() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// secureClusterFiles returns a tar archive holding the broker's start script,
-// properties and a freshly generated self-signed certificate and key. The
-// archive extracts to secureContainerDir.
+// secureClusterFiles returns a tar archive with the start script, the broker
+// properties, and a new self-signed certificate and key. The archive extracts
+// to secureContainerDir.
 func secureClusterFiles(hostPort, adminPassword, limitedPassword string) (*bytes.Reader, error) {
 	certPEM, keyPEM, err := selfSignedCertificate()
 	if err != nil {
@@ -184,10 +187,10 @@ func secureClusterFiles(hostPort, adminPassword, limitedPassword string) (*bytes
 	properties := strings.Join([]string{
 		"process.roles=broker,controller",
 		fmt.Sprintf("node.id=%d", secureNodeID),
-		// The controller listener is plaintext but bound to the container's
-		// loopback and never published, so only the broker itself can reach it.
-		// Its principal is User:ANONYMOUS, which is why that principal is a
-		// super user; client listeners always authenticate as a named user.
+		// The controller listener is PLAINTEXT. It uses the loopback address of
+		// the container, and the container does not publish it. Only the broker
+		// can connect to it. Its principal is User:ANONYMOUS, so that principal
+		// is a super user. Clients of the SASL_SSL listener always have a name.
 		fmt.Sprintf("controller.quorum.voters=%d@127.0.0.1:9093", secureNodeID),
 		"controller.listener.names=CONTROLLER",
 		fmt.Sprintf("listeners=CONTROLLER://127.0.0.1:9093,SASL_SSL://:%s", hostPort),
@@ -204,7 +207,7 @@ func secureClusterFiles(hostPort, adminPassword, limitedPassword string) (*bytes
 		"ssl.keystore.location=" + secureContainerDir + "/server.pem",
 		"ssl.truststore.type=PEM",
 		"ssl.truststore.location=" + secureContainerDir + "/cert.pem",
-		// The broker connects to itself over TLS for inter-broker traffic.
+		// The broker connects to itself with TLS for inter-broker traffic.
 		"ssl.endpoint.identification.algorithm=",
 		"authorizer.class.name=org.apache.kafka.metadata.authorizer.StandardAuthorizer",
 		"allow.everyone.if.no.acl.found=false",
@@ -217,8 +220,8 @@ func secureClusterFiles(hostPort, adminPassword, limitedPassword string) (*bytes
 		"",
 	}, "\n")
 
-	// SCRAM credentials of a KRaft cluster live in the metadata log, so they are
-	// written when the storage is formatted.
+	// A KRaft cluster keeps SCRAM credentials in the metadata log. The format
+	// command writes them.
 	scram := func(user, password string) string {
 		return fmt.Sprintf("--add-scram 'SCRAM-SHA-256=[name=%[1]s,password=%[2]s]' --add-scram 'SCRAM-SHA-512=[name=%[1]s,password=%[2]s]'", user, password)
 	}
@@ -269,9 +272,9 @@ exec /opt/kafka/bin/kafka-server-start.sh %[1]s/server.properties
 	return bytes.NewReader(buf.Bytes()), nil
 }
 
-// selfSignedCertificate returns a PEM certificate and PKCS#8 private key valid
-// for localhost and 127.0.0.1. The certificate is its own issuer, so a client
-// that verifies it against the system roots must reject it.
+// selfSignedCertificate returns a PEM certificate and a PKCS#8 private key for
+// localhost and 127.0.0.1. The certificate signs itself. A client that checks
+// it against the system root certificates must reject it.
 func selfSignedCertificate() (certPEM, keyPEM []byte, err error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -305,9 +308,9 @@ func selfSignedCertificate() (certPEM, keyPEM []byte, err error) {
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), nil
 }
 
-// requireSecureCluster waits for the secured cluster to accept authenticated
-// connections, then returns it. The first caller pays the wait; the container
-// has been booting since TestMain. It skips when acceptance tests are off.
+// requireSecureCluster waits until the secured cluster accepts authenticated
+// connections, then returns the cluster. The first caller waits. The container
+// starts in TestMain. The test is skipped when acceptance tests are off.
 func requireSecureCluster(t *testing.T) *secureClusterInfo {
 	t.Helper()
 	if secureCluster == nil {
@@ -320,8 +323,9 @@ func requireSecureCluster(t *testing.T) *secureClusterInfo {
 	return secureCluster
 }
 
-// waitReady polls until the admin user can authenticate over TLS, then creates
-// the seed topic and waits for it to be visible. Every wait is bounded.
+// waitReady polls until the admin user can authenticate with TLS. Then it
+// creates the seed topic and waits until the topic is visible. Each wait has a
+// time limit.
 func (c *secureClusterInfo) waitReady() error {
 	deadline := time.Now().Add(secureReadyTimeout)
 	retry := func(what string, fn func() error) error {
@@ -377,9 +381,9 @@ func (c *secureClusterInfo) waitReady() error {
 	})
 }
 
-// adminDialer dials the secured cluster as the super user. It skips
-// certificate verification because the certificate is self-signed; the
-// verifying path is covered by its own test through the provider.
+// adminDialer connects to the secured cluster as the super user. It does not
+// verify the certificate, because the certificate is self-signed. A separate
+// test checks the verification through the provider.
 func (c *secureClusterInfo) adminDialer() *kafka.Dialer {
 	return &kafka.Dialer{
 		Timeout:       10 * time.Second,

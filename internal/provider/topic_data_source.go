@@ -70,19 +70,17 @@ func (d *topicDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 }
 
 func (d *topicDataSource) Configure(ctx context.Context, req datasource.ConfigureRequest, resp *datasource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
+	// Terraform calls Configure with no provider data before the provider is configured.
 	if req.ProviderData == nil {
 		return
 	}
 
 	client, ok := req.ProviderData.(*kafkaclient.ReadOnlyClient)
-
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Data Source Configure Type",
 			fmt.Sprintf("Expected *kafkaclient.ReadOnlyClient, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
@@ -92,9 +90,12 @@ func (d *topicDataSource) Configure(ctx context.Context, req datasource.Configur
 func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, resp *datasource.ReadResponse) {
 	var data topicDataSourceModel
 
-	// Read Terraform configuration data into the model
-	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
+	if d.client == nil {
+		resp.Diagnostics.AddError(missingClientSummary, missingClientDetail)
+		return
+	}
 
+	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -104,13 +105,13 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		if errors.Is(err, kafkaclient.ErrTopicNotFound) {
 			tflog.Debug(ctx, "topic not found", map[string]any{"topic": data.Name.ValueString()})
 		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
+		resp.Diagnostics.AddError("Unable to read topic", err.Error())
 		return
 	}
 
 	replicationFactor, err := replicaCount(topicInfo)
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to get replica count, got error: %s", err))
+		resp.Diagnostics.AddError("Unable to read topic replication factor", err.Error())
 		return
 	}
 
@@ -128,10 +129,7 @@ func (d *topicDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		configElement,
 	)
 
-	// Write logs using the tflog package
-	// Documentation: https://terraform.io/plugin/log
-	tflog.Trace(ctx, "read a data source")
+	tflog.Trace(ctx, "Read topic data source", map[string]any{"topic": data.Name.ValueString()})
 
-	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }

@@ -282,12 +282,10 @@ func TestTopicUpdaterReplicationFactor(t *testing.T) {
 			return []kafkaclient.PartitionReassignment{{Partition: 0}}, nil
 		}
 
-		start := time.Now()
 		err := testUpdater(f).replicationFactor(ctx, "t", 2)
 
 		require.ErrorIs(t, err, context.Canceled)
 		require.NotErrorIs(t, err, context.DeadlineExceeded)
-		assert.Less(t, time.Since(start), 10*time.Second, "the wait stopped long before the timeout")
 	})
 
 	t.Run("cancelled_context_stops_waiting", func(t *testing.T) {

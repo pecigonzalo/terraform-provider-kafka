@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -64,14 +65,14 @@ func (c *Client) CreatePartitions(ctx context.Context, topic string, total int, 
 	for i, rs := range replicas {
 		ids := make([]int32, len(rs))
 		for j, id := range rs {
-			ids[j] = int32(id)
+			ids[j] = int32(id) //nolint:gosec // validateReplicas checks the range
 		}
 		assignments[i] = kafka.TopicPartitionAssignment{BrokerIDs: ids}
 	}
 	resp, err := c.kc.CreatePartitions(ctx, &kafka.CreatePartitionsRequest{
 		Topics: []kafka.TopicPartitionsConfig{{
 			Name:                      topic,
-			Count:                     int32(total),
+			Count:                     int32(total), //nolint:gosec // validateCreatePartitions checks the range
 			TopicPartitionAssignments: assignments,
 		}},
 	})
@@ -94,6 +95,8 @@ func validateCreatePartitions(topic string, total int, replicas [][]int) error {
 		return errors.New("topic name must not be empty")
 	case len(replicas) == 0:
 		return errors.New("at least one new partition assignment is required")
+	case total > math.MaxInt32:
+		return fmt.Errorf("total partitions %d is more than %d", total, math.MaxInt32)
 	case total <= len(replicas):
 		return fmt.Errorf("total partitions %d must exceed the %d new assignments", total, len(replicas))
 	}
@@ -115,6 +118,9 @@ func validateReplicas(replicas []int) error {
 	for i, id := range replicas {
 		if id < 0 {
 			return fmt.Errorf("broker id %d is negative", id)
+		}
+		if id > math.MaxInt32 {
+			return fmt.Errorf("broker id %d is more than %d", id, math.MaxInt32)
 		}
 		if slices.Contains(replicas[:i], id) {
 			return fmt.Errorf("broker %d appears more than once", id)

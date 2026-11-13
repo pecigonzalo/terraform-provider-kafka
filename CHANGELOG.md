@@ -4,9 +4,19 @@
 
 BREAKING CHANGES:
 
-* provider: `tls.enabled` is now `true` by default. The schema always said this. To connect without TLS, set `tls.enabled = false`. (#152)
+* provider: `tls.enabled` is now `true` by default. In v0.5.3, the provider used TLS only when you set `tls.enabled = true`, although the documentation said the default was `true`. If you connect to a plain-text listener and have no `tls` block, you must now set `tls = { enabled = false }`. (#152)
+* provider: The SASL mechanisms now send the mechanism that you choose. In v0.5.3, `mechanism = "plain"` sent SCRAM-SHA-256, and `scram-sha256` and `scram-sha512` always gave the error `unable to detect SASL mechanism`. Now `plain` sends PLAIN, and both SCRAM mechanisms work. The spellings `scram-sha-256` and `scram-sha-512` are also valid. If your configuration worked only because of the old behavior, authentication can now fail. (#152)
+* provider: The SASL user name and password now come from the configuration or from `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD`, with any `mechanism`. In v0.5.3, the provider read them from the configuration only if you set `mechanism`. (#152)
 * provider: `bootstrap_servers` is now optional. If you do not set it, the provider reads the `KAFKA_BOOTSTRAP_SERVERS` environment variable. This variable holds a comma-separated list. The old default `localhost:9092` is removed. If you set neither, the provider gives an error. (#152)
 * provider: A bad value in `KAFKA_SASL_ENABLED` or `KAFKA_TIMEOUT` now causes an error. Before, the provider ignored it. (#156)
+* provider: `timeout` must now be 1 or more. In v0.5.3, the provider did not check it. (#154)
+* resource/`kafka_topic`: `partitions` and `replication_factor` must be 1 or more. `name` must have 1 to 249 characters. It can only have letters, digits, `.`, `_` and `-`, and it cannot be `.` or `..`. (#154, #158)
+* resource/`kafka_topic`: The provider now rejects two changes during plan. Before, it rejected them during apply. You cannot lower `partitions`. You cannot set `replication_factor` above the number of brokers. (#159)
+* resource/`kafka_topic`: `configuration` is now optional only, and the provider tracks only the keys that you set. In v0.5.3, `configuration` was also computed, and the provider stored all broker settings, with their defaults, in state. See the upgrade note below. (#154)
+
+UPGRADE NOTES:
+
+* resource/`kafka_topic`: Review the first plan after you upgrade, before you apply it. If your state holds all broker settings and you do not set `configuration`, the plan changes `configuration` to null. If you set some keys, the plan removes the other keys from state. When you apply the plan, the provider sends the full list of keys that you set. Kafka then resets all other topic settings to the broker defaults, also the settings that you or another tool set outside Terraform. To keep a setting, add it to `configuration` before you apply. (#154, #176)
 
 FEATURES:
 
@@ -15,16 +25,12 @@ FEATURES:
 
 ENHANCEMENTS:
 
-* resource/`kafka_topic`: Two changes now cause an error during plan. Before, they caused an error during apply. You cannot lower `partitions`. You cannot set `replication_factor` above the number of brokers. (#159)
-* resource/`kafka_topic`: The provider checks `name` during plan. It can only have letters, digits, `.`, `_` and `-`. It must have 1 to 249 characters. It cannot be `.` or `..`. `partitions`, `replication_factor` and the provider `timeout` must be 1 or more. (#154, #158)
 * resource/`kafka_topic`: When you change `replication_factor`, apply now waits until Kafka finishes the change. If this takes longer than the provider `timeout`, the error tells you to run `terraform plan`. (#161)
 * resource/`kafka_topic`: When you change `partitions` or `replication_factor`, the provider uses the topic state from the broker. Before, it could use old Terraform state. (#153, #181)
 * resource/`kafka_topic`: When more than one topic fails to create, delete or change, the error now lists all of them. Before, it showed only the first. (#157)
-* provider: The SASL mechanisms `scram-sha256` and `scram-sha512` now work. The spellings `scram-sha-256` and `scram-sha-512` are also valid. The SASL user name and password can come from the `KAFKA_SASL_*` environment variables, with any `mechanism`. (#152)
 
 BUG FIXES:
 
-* resource/`kafka_topic`: `configuration` now tracks only the keys that you set. Broker defaults no longer cause a difference in each plan. `configuration` is now optional only. If your state holds all broker settings and you do not set `configuration`, the next plan clears it one time. This resets those keys to the broker defaults. (#154)
 * resource/`kafka_topic`: The provider now shows an error when a replica change fails. Before, it ignored the error. (#153)
 * resource/`kafka_topic`: Delete no longer stops with a panic. Delete succeeds if the topic is already gone. (#153)
 * resource/`kafka_topic`: The provider now converts `configuration` values with typed entries. Before, it removed quotes from the text of the value. The provider skips null and unknown values. (#153)

@@ -219,10 +219,22 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
 		return
 	}
-	// The topic exists now, so a failure to read it back must not stop the state
-	// from being saved: the next Read reports whatever is wrong.
-	if err := r.waitForTopicVisible(ctx, data.Name.ValueString()); err != nil {
-		tflog.Warn(ctx, fmt.Sprintf("Created topic %s but could not read it back: %s", data.Name.ValueString(), err))
+	r.saveCreated(ctx, data, func(ctx context.Context) error {
+		return r.waitForTopicVisible(ctx, data.Name.ValueString())
+	}, resp)
+}
+
+// saveCreated saves the created topic to state after waiting for it to become
+// readable. The topic exists by now, so a failure to read it back must not stop
+// the state from being saved, or the next apply would fail with "already
+// exists". It is reported as a warning instead.
+func (r *topicResource) saveCreated(ctx context.Context, data *TopicResourceModel, wait func(context.Context) error, resp *resource.CreateResponse) {
+	if err := wait(ctx); err != nil {
+		resp.Diagnostics.AddWarning(
+			"Topic created but could not be read back",
+			fmt.Sprintf("Topic %q was created, but reading it back failed: %s. The topic is saved to state; "+
+				"run terraform plan again to refresh it.", data.Name.ValueString(), err),
+		)
 	}
 	data.ID = data.Name
 	tflog.Trace(ctx, "Created topic")

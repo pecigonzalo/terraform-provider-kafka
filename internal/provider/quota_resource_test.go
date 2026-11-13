@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
+	"github.com/stretchr/testify/require"
 
 	"github.com/pecigonzalo/terraform-provider-kafka/internal/kafkaclient"
 )
@@ -77,6 +79,9 @@ func TestAccQuotaResource(t *testing.T) {
 				PlanOnly: true,
 			},
 			{
+				PreConfig: func() {
+					waitForQuotaValues(t, id, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 4194304})
+				},
 				ResourceName:      "kafka_quota.test",
 				ImportState:       true,
 				ImportStateId:     id,
@@ -84,6 +89,31 @@ func TestAccQuotaResource(t *testing.T) {
 			},
 		},
 	})
+}
+
+// waitForQuotaValues fails the test unless every broker in
+// KAFKA_BOOTSTRAP_SERVERS reports exactly the wanted limits for the quota with
+// the given id.
+//
+// An import adopts every limit that the broker reports. It has no expected
+// state to wait for. The client can reach a broker that has not applied a
+// recent change yet, so an import right after a change can see old limits.
+// Tests call this from PreConfig of an import step first.
+func waitForQuotaValues(t *testing.T, id string, want kafkaclient.QuotaValues) {
+	t.Helper()
+
+	entity, err := decodeQuotaID(id)
+	require.NoError(t, err)
+
+	for address := range strings.SplitSeq(os.Getenv("KAFKA_BOOTSTRAP_SERVERS"), ",") {
+		client, err := kafkaclient.New(t.Context(), kafkaclient.Config{BootstrapServer: address, Timeout: 10 * time.Second})
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			entry, err := describeQuota(t.Context(), client, entity)
+			return err == nil && entry != nil && maps.Equal(entry.Values, want)
+		}, 30*time.Second, 200*time.Millisecond,
+			"broker %s does not report the limits %v for quota %q", address, want, id)
+	}
 }
 
 func TestAccQuotaResourceDefaultEntities(t *testing.T) {
@@ -111,6 +141,9 @@ resource "kafka_quota" "test" {
 				),
 			},
 			{
+				PreConfig: func() {
+					waitForQuotaValues(t, "user=<default>,client-id="+client, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 10})
+				},
 				ResourceName:      "kafka_quota.test",
 				ImportState:       true,
 				ImportStateVerify: true,
@@ -134,6 +167,9 @@ resource "kafka_quota" "test" {
 				Check: resource.TestCheckResourceAttr("kafka_quota.test", "id", "ip=203.0.113.7"),
 			},
 			{
+				PreConfig: func() {
+					waitForQuotaValues(t, "ip=203.0.113.7", kafkaclient.QuotaValues{kafkaclient.QuotaConnectionCreationRate: 5})
+				},
 				ResourceName:      "kafka_quota.test",
 				ImportState:       true,
 				ImportStateVerify: true,

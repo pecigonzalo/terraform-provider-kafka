@@ -47,7 +47,8 @@ type PartitionInfo struct {
 //
 // Config holds the topic's explicitly set configuration: entries that only
 // reflect broker defaults or static broker configuration are omitted.
-// Sensitive entries with a withheld value are reported as "SENSITIVE". Partitions are ordered by partition ID.
+// Sensitive entries with a withheld value are reported as "SENSITIVE".
+// Partitions are ordered by partition ID.
 type TopicInfo struct {
 	Name       string
 	Partitions []PartitionInfo

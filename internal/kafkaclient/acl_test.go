@@ -55,7 +55,7 @@ func newACLTestClient(t *testing.T, rt *fakeACLRoundTripper) *Client {
 func validACL() ACL {
 	return ACL{
 		ResourceType: ACLResourceTypeTopic, ResourceName: "orders", PatternType: ACLPatternTypeLiteral,
-		Principal: "User:alice", Host: "*", Operation: ACLOperationRead, PermissionType: ACLPermissionTypeAllow,
+		Principal: "User:alice", Host: "10.0.0.1", Operation: ACLOperationRead, PermissionType: ACLPermissionTypeAllow,
 	}
 }
 
@@ -168,8 +168,24 @@ func TestACLToKafka(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, kafka.ACLEntry{
 		ResourceType: kafka.ResourceTypeTopic, ResourceName: "orders", ResourcePatternType: kafka.PatternTypeLiteral,
-		Principal: "User:alice", Host: "*", Operation: kafka.ACLOperationTypeRead, PermissionType: kafka.ACLPermissionTypeAllow,
+		Principal: "User:alice", Host: "10.0.0.1", Operation: kafka.ACLOperationTypeRead, PermissionType: kafka.ACLPermissionTypeAllow,
 	}, entry)
+}
+
+func TestACLToKafka_UsesTheParsedValues(t *testing.T) {
+	a := validACL()
+	a.ResourceType = "TOPIC"
+	a.PatternType = " Literal "
+	a.Operation = "READ"
+	a.PermissionType = "Allow"
+
+	entry, err := a.toKafka()
+
+	require.NoError(t, err)
+	assert.Equal(t, kafka.ResourceTypeTopic, entry.ResourceType)
+	assert.Equal(t, kafka.PatternTypeLiteral, entry.ResourcePatternType)
+	assert.Equal(t, kafka.ACLOperationTypeRead, entry.Operation)
+	assert.Equal(t, kafka.ACLPermissionTypeAllow, entry.PermissionType)
 }
 
 func TestACLValidate(t *testing.T) {
@@ -241,7 +257,7 @@ func TestCreateACL(t *testing.T) {
 		assert.Equal(t, "orders", got.ResourceName)
 		assert.Equal(t, int8(kafka.PatternTypeLiteral), got.ResourcePatternType)
 		assert.Equal(t, "User:alice", got.Principal)
-		assert.Equal(t, "*", got.Host)
+		assert.Equal(t, "10.0.0.1", got.Host)
 		assert.Equal(t, int8(kafka.ACLOperationTypeRead), got.Operation)
 		assert.Equal(t, int8(kafka.ACLPermissionTypeAllow), got.PermissionType)
 	})
@@ -325,7 +341,7 @@ func TestDescribeACLs(t *testing.T) {
 				},
 			},
 		}}}
-		got, err := newACLTestClient(t, rt).ReadOnly().DescribeACLs(t.Context(), ACLFilter{ResourceType: ACLResourceTypeTopic, Principal: "User:alice"})
+		got, err := newACLTestClient(t, rt).ReadOnly().DescribeACLs(t.Context(), ACLFilter{ResourceType: ACLResourceTypeTopic, Principal: "User:alice", Host: "10.0.0.1"})
 		require.NoError(t, err)
 		require.Len(t, got, 3)
 		assert.Equal(t, ACL{ACLResourceTypeTopic, "orders", ACLPatternTypeLiteral, "User:alice", "*", ACLOperationRead, ACLPermissionTypeAllow}, got[0])
@@ -336,6 +352,7 @@ func TestDescribeACLs(t *testing.T) {
 		f := rt.gotDescribe.Filter
 		assert.Equal(t, int8(kafka.ResourceTypeTopic), f.ResourceTypeFilter)
 		assert.Equal(t, "User:alice", f.PrincipalFilter)
+		assert.Equal(t, "10.0.0.1", f.HostFilter)
 		assert.Equal(t, int8(kafka.PatternTypeAny), f.ResourcePatternTypeFilter)
 		assert.Equal(t, int8(kafka.ACLOperationTypeAny), f.Operation)
 		assert.Equal(t, int8(kafka.ACLPermissionTypeAny), f.PermissionType)
@@ -394,7 +411,7 @@ func TestDeleteACLs(t *testing.T) {
 			Principal: "User:alice", Host: "*", Operation: int8(kafka.ACLOperationTypeRead), PermissionType: int8(kafka.ACLPermissionTypeAllow),
 		}
 	}
-	filter := ACLFilter{ResourceType: ACLResourceTypeTopic, ResourceName: "orders", PatternType: ACLPatternTypeLiteral, Principal: "User:alice"}
+	filter := ACLFilter{ResourceType: ACLResourceTypeTopic, ResourceName: "orders", PatternType: ACLPatternTypeLiteral, Principal: "User:alice", Host: "10.0.0.1"}
 
 	t.Run("counts_deleted", func(t *testing.T) {
 		rt := &fakeACLRoundTripper{deleteResp: &deleteacls.Response{FilterResults: []deleteacls.FilterResult{
@@ -407,6 +424,8 @@ func TestDeleteACLs(t *testing.T) {
 		f := rt.gotDelete.Filters[0]
 		assert.Equal(t, int8(kafka.ResourceTypeTopic), f.ResourceTypeFilter)
 		assert.Equal(t, "orders", f.ResourceNameFilter)
+		assert.Equal(t, "User:alice", f.PrincipalFilter)
+		assert.Equal(t, "10.0.0.1", f.HostFilter)
 		assert.Equal(t, int8(kafka.PatternTypeLiteral), f.ResourcePatternTypeFilter)
 		assert.Equal(t, int8(kafka.ACLOperationTypeAny), f.Operation)
 	})
@@ -457,9 +476,11 @@ func TestDeleteACLs(t *testing.T) {
 
 	t.Run("invalid_filter_rejected", func(t *testing.T) {
 		for name, f := range map[string]ACLFilter{
-			"bad_pattern":   {PatternType: "glob", ResourceName: "x"},
-			"bad_principal": {Principal: "alice"},
-			"bad_host":      {Host: "1.*"},
+			"bad_pattern":    {PatternType: "glob", ResourceName: "x"},
+			"bad_operation":  {Operation: "touch"},
+			"bad_permission": {PermissionType: "maybe"},
+			"bad_principal":  {Principal: "alice"},
+			"bad_host":       {Host: "1.*"},
 		} {
 			rt := &fakeACLRoundTripper{}
 			_, err := newACLTestClient(t, rt).DeleteACLs(t.Context(), f)
@@ -576,14 +597,12 @@ func TestValidatePrincipal(t *testing.T) {
 	}
 }
 
-func TestACLFilterUsesHostAndPrincipalRules(t *testing.T) {
+func TestACLFilterUsesPrincipalRules(t *testing.T) {
 	tests := []struct {
 		name    string
 		filter  ACLFilter
 		wantErr bool
 	}{
-		{"ip_host", ACLFilter{Host: "10.0.0.1"}, false},
-		{"range_host", ACLFilter{Host: "10.0.0.0/8"}, true},
 		{"user_principal", ACLFilter{Principal: "User:alice"}, false},
 		{"wrong_case_principal", ACLFilter{Principal: "user:alice"}, true},
 	}
@@ -595,6 +614,34 @@ func TestACLFilterUsesHostAndPrincipalRules(t *testing.T) {
 				return
 			}
 			assert.NoError(t, err)
+		})
+	}
+}
+
+func TestACLEnumsCodes(t *testing.T) {
+	valid := aclEnums{ACLResourceTypeTopic, ACLPatternTypeLiteral, ACLOperationRead, ACLPermissionTypeAllow}
+
+	got, err := valid.codes()
+	require.NoError(t, err)
+	assert.Equal(t, aclCodes{
+		resourceType: int8(kafka.ResourceTypeTopic), patternType: int8(kafka.PatternTypeLiteral),
+		operation: int8(kafka.ACLOperationTypeRead), permissionType: int8(kafka.ACLPermissionTypeAllow),
+	}, got)
+
+	tests := map[string]func(*aclEnums){
+		"resource_type":   func(e *aclEnums) { e.resourceType = "TOPIC" },
+		"pattern_type":    func(e *aclEnums) { e.patternType = "glob" },
+		"operation":       func(e *aclEnums) { e.operation = "READ" },
+		"permission_type": func(e *aclEnums) { e.permissionType = "ALLOW" },
+	}
+	for name, mod := range tests {
+		t.Run("unknown_"+name+"_is_an_error", func(t *testing.T) {
+			e := valid
+			mod(&e)
+
+			_, err := e.codes()
+
+			require.ErrorIs(t, err, ErrInvalidACL)
 		})
 	}
 }

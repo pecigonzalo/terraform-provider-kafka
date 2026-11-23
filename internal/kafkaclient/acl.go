@@ -272,43 +272,71 @@ var validOperations = map[ACLResourceType][]ACLOperation{
 //   - a prefixed pattern cannot use the wildcard name "*";
 //   - the operation must be supported by the resource type.
 func (a ACL) Validate() error {
+	_, err := a.parse()
+	return err
+}
+
+// aclEnums holds the parsed enum values of an ACL or an ACL filter.
+type aclEnums struct {
+	resourceType   ACLResourceType
+	patternType    ACLPatternType
+	operation      ACLOperation
+	permissionType ACLPermissionType
+}
+
+// parse checks the ACL as [ACL.Validate] describes and returns its parsed enum
+// values. The parsed values have the canonical case. Use them, and not the
+// text in the ACL, to build a request.
+func (a ACL) parse() (aclEnums, error) {
 	rt, err := ParseACLResourceType(string(a.ResourceType))
 	if err != nil {
-		return err
+		return aclEnums{}, err
 	}
 	pt, err := ParseACLPatternType(string(a.PatternType))
 	if err != nil {
-		return err
+		return aclEnums{}, err
 	}
 	op, err := ParseACLOperation(string(a.Operation))
 	if err != nil {
-		return err
+		return aclEnums{}, err
 	}
-	if _, err := ParseACLPermissionType(string(a.PermissionType)); err != nil {
-		return err
+	perm, err := ParseACLPermissionType(string(a.PermissionType))
+	if err != nil {
+		return aclEnums{}, err
 	}
 	if a.ResourceName == "" {
-		return fmt.Errorf("%w: resource name must not be empty", ErrInvalidACL)
+		return aclEnums{}, fmt.Errorf("%w: resource name must not be empty", ErrInvalidACL)
 	}
 	if err := validatePrincipal(a.Principal); err != nil {
-		return err
+		return aclEnums{}, err
 	}
 	if err := validateHost(a.Host); err != nil {
-		return err
+		return aclEnums{}, err
 	}
+	if err := checkResourceRules(rt, a.ResourceName, pt, op); err != nil {
+		return aclEnums{}, err
+	}
+	return aclEnums{resourceType: rt, patternType: pt, operation: op, permissionType: perm}, nil
+}
+
+// checkResourceRules checks the rules that link the resource type, the
+// resource name, the pattern type and the operation. An empty name, and a type
+// or operation of "any", are not checked. It returns an error wrapping
+// [ErrInvalidACL].
+func checkResourceRules(rt ACLResourceType, name string, pt ACLPatternType, op ACLOperation) error {
 	if rt == ACLResourceTypeCluster {
-		if a.ResourceName != ClusterResourceName {
+		if name != "" && name != ClusterResourceName {
 			return fmt.Errorf("%w: resource name for resource type cluster must be %q, got %q",
-				ErrInvalidACL, ClusterResourceName, a.ResourceName)
+				ErrInvalidACL, ClusterResourceName, name)
 		}
-		if pt != ACLPatternTypeLiteral {
-			return fmt.Errorf("%w: resource type cluster requires pattern type literal, got %q", ErrInvalidACL, pt)
+		if pt == ACLPatternTypePrefixed {
+			return fmt.Errorf("%w: resource type cluster has no prefixed ACLs, its pattern type is literal", ErrInvalidACL)
 		}
 	}
-	if pt == ACLPatternTypePrefixed && a.ResourceName == "*" {
+	if pt == ACLPatternTypePrefixed && name == "*" {
 		return fmt.Errorf("%w: pattern type prefixed cannot be combined with the wildcard resource name %q; use literal", ErrInvalidACL, "*")
 	}
-	if !slices.Contains(validOperations[rt], op) {
+	if rt != ACLResourceTypeAny && op != ACLOperationAny && !slices.Contains(validOperations[rt], op) {
 		return fmt.Errorf("%w: operation %q is not valid for resource type %q, valid operations are: %s",
 			ErrInvalidACL, op, rt, joinStrings(validOperations[rt]))
 	}
@@ -359,14 +387,22 @@ func validateHost(h string) error {
 
 // isMatchAll reports whether the filter has no restriction at all.
 func (f ACLFilter) isMatchAll() bool {
-	anyEnum := func(s string, any string) bool { return s == "" || strings.EqualFold(strings.TrimSpace(s), any) }
-	return anyEnum(string(f.ResourceType), "any") &&
+	isAny := func(s string) bool { return strings.EqualFold(orAny(s), "any") }
+	return isAny(string(f.ResourceType)) &&
 		f.ResourceName == "" &&
-		anyEnum(string(f.PatternType), "any") &&
+		isAny(string(f.PatternType)) &&
 		f.Principal == "" &&
 		f.Host == "" &&
-		anyEnum(string(f.Operation), "any") &&
-		anyEnum(string(f.PermissionType), "any")
+		isAny(string(f.Operation)) &&
+		isAny(string(f.PermissionType))
+}
+
+// orAny returns "any" for an empty value, and the trimmed value otherwise.
+func orAny(s string) string {
+	if s = strings.TrimSpace(s); s == "" {
+		return "any"
+	}
+	return s
 }
 
 // Validate checks the filter: enums must be known values (empty means
@@ -389,106 +425,105 @@ func (f ACLFilter) Validate() error {
 //   - a prefixed pattern cannot be combined with the wildcard name "*";
 //   - the operation must be supported by the resource type.
 func (f ACLFilter) CheckConsistency() error {
-	if err := f.Validate(); err != nil {
+	e, err := f.parse()
+	if err != nil {
 		return err
 	}
-	// Validate guarantees these parse.
-	rt, _ := ParseACLResourceTypeFilter(orAnyString(string(f.ResourceType)))
-	pt, _ := ParseACLPatternTypeFilter(orAnyString(string(f.PatternType)))
-	op, _ := ParseACLOperationFilter(orAnyString(string(f.Operation)))
-
-	if rt == ACLResourceTypeCluster {
-		if f.ResourceName != "" && f.ResourceName != ClusterResourceName {
-			return fmt.Errorf("%w: resource name for resource type cluster must be %q, got %q",
-				ErrInvalidACL, ClusterResourceName, f.ResourceName)
-		}
-		if pt == ACLPatternTypePrefixed {
-			return fmt.Errorf("%w: resource type cluster has no prefixed ACLs, its pattern type is literal", ErrInvalidACL)
-		}
-	}
-	if pt == ACLPatternTypePrefixed && f.ResourceName == "*" {
-		return fmt.Errorf("%w: pattern type prefixed cannot be combined with the wildcard resource name %q; use literal", ErrInvalidACL, "*")
-	}
-	if rt != ACLResourceTypeAny && op != ACLOperationAny && !slices.Contains(validOperations[rt], op) {
-		return fmt.Errorf("%w: operation %q is not valid for resource type %q, valid operations are: %s",
-			ErrInvalidACL, op, rt, joinStrings(validOperations[rt]))
-	}
-	return nil
+	return checkResourceRules(e.resourceType, f.ResourceName, e.patternType, e.operation)
 }
 
-func orAnyString(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return "any"
-	}
-	return s
-}
-
-// toKafka converts the filter to kafka-go's wire form, validating it.
-func (f ACLFilter) toKafka() (kafka.ACLFilter, error) {
-	orAny := func(s, any string) string {
-		if strings.TrimSpace(s) == "" {
-			return any
-		}
-		return s
-	}
-	rt, err := ParseACLResourceTypeFilter(orAny(string(f.ResourceType), "any"))
+// parse checks the enums, the principal and the host of the filter. It returns
+// the parsed enum values, which have the canonical case.
+func (f ACLFilter) parse() (aclEnums, error) {
+	rt, err := ParseACLResourceTypeFilter(orAny(string(f.ResourceType)))
 	if err != nil {
-		return kafka.ACLFilter{}, err
+		return aclEnums{}, err
 	}
-	pt, err := ParseACLPatternTypeFilter(orAny(string(f.PatternType), "any"))
+	pt, err := ParseACLPatternTypeFilter(orAny(string(f.PatternType)))
 	if err != nil {
-		return kafka.ACLFilter{}, err
+		return aclEnums{}, err
 	}
-	op, err := ParseACLOperationFilter(orAny(string(f.Operation), "any"))
+	op, err := ParseACLOperationFilter(orAny(string(f.Operation)))
 	if err != nil {
-		return kafka.ACLFilter{}, err
+		return aclEnums{}, err
 	}
-	perm, err := ParseACLPermissionTypeFilter(orAny(string(f.PermissionType), "any"))
+	perm, err := ParseACLPermissionTypeFilter(orAny(string(f.PermissionType)))
 	if err != nil {
-		return kafka.ACLFilter{}, err
+		return aclEnums{}, err
 	}
 	if f.Host != "" {
 		if err := validateHost(f.Host); err != nil {
-			return kafka.ACLFilter{}, err
+			return aclEnums{}, err
 		}
 	}
 	if f.Principal != "" {
 		if err := validatePrincipal(f.Principal); err != nil {
-			return kafka.ACLFilter{}, err
+			return aclEnums{}, err
 		}
 	}
-	rtc, _ := enumCode("resource type", rt, resourceTypeTable)
-	ptc, _ := enumCode("pattern type", pt, patternTypeTable)
-	opc, _ := enumCode("operation", op, operationTable)
-	permc, _ := enumCode("permission type", perm, permissionTypeTable)
+	return aclEnums{resourceType: rt, patternType: pt, operation: op, permissionType: perm}, nil
+}
+
+// toKafka converts the filter to kafka-go's wire form, validating it.
+func (f ACLFilter) toKafka() (kafka.ACLFilter, error) {
+	e, err := f.parse()
+	if err != nil {
+		return kafka.ACLFilter{}, err
+	}
+	codes, err := e.codes()
+	if err != nil {
+		return kafka.ACLFilter{}, err
+	}
 	return kafka.ACLFilter{
-		ResourceTypeFilter:        kafka.ResourceType(rtc),
+		ResourceTypeFilter:        kafka.ResourceType(codes.resourceType),
 		ResourceNameFilter:        f.ResourceName,
-		ResourcePatternTypeFilter: kafka.PatternType(ptc),
+		ResourcePatternTypeFilter: kafka.PatternType(codes.patternType),
 		PrincipalFilter:           f.Principal,
 		HostFilter:                f.Host,
-		Operation:                 kafka.ACLOperationType(opc),
-		PermissionType:            kafka.ACLPermissionType(permc),
+		Operation:                 kafka.ACLOperationType(codes.operation),
+		PermissionType:            kafka.ACLPermissionType(codes.permissionType),
 	}, nil
 }
 
+// aclCodes holds the Kafka wire codes of four parsed enum values.
+type aclCodes struct{ resourceType, patternType, operation, permissionType int8 }
+
+// codes looks up the Kafka wire codes of the parsed enum values.
+func (e aclEnums) codes() (aclCodes, error) {
+	var c aclCodes
+	var err error
+	if c.resourceType, err = enumCode("resource type", e.resourceType, resourceTypeTable); err != nil {
+		return aclCodes{}, err
+	}
+	if c.patternType, err = enumCode("pattern type", e.patternType, patternTypeTable); err != nil {
+		return aclCodes{}, err
+	}
+	if c.operation, err = enumCode("operation", e.operation, operationTable); err != nil {
+		return aclCodes{}, err
+	}
+	if c.permissionType, err = enumCode("permission type", e.permissionType, permissionTypeTable); err != nil {
+		return aclCodes{}, err
+	}
+	return c, nil
+}
+
 func (a ACL) toKafka() (kafka.ACLEntry, error) {
-	if err := a.Validate(); err != nil {
+	e, err := a.parse()
+	if err != nil {
 		return kafka.ACLEntry{}, err
 	}
-	// Validate guarantees every lookup succeeds.
-	rt, _ := enumCode("resource type", a.ResourceType, resourceTypeTable)
-	pt, _ := enumCode("pattern type", a.PatternType, patternTypeTable)
-	op, _ := enumCode("operation", a.Operation, operationTable)
-	perm, _ := enumCode("permission type", a.PermissionType, permissionTypeTable)
+	codes, err := e.codes()
+	if err != nil {
+		return kafka.ACLEntry{}, err
+	}
 	return kafka.ACLEntry{
-		ResourceType:        kafka.ResourceType(rt),
+		ResourceType:        kafka.ResourceType(codes.resourceType),
 		ResourceName:        a.ResourceName,
-		ResourcePatternType: kafka.PatternType(pt),
+		ResourcePatternType: kafka.PatternType(codes.patternType),
 		Principal:           a.Principal,
 		Host:                a.Host,
-		Operation:           kafka.ACLOperationType(op),
-		PermissionType:      kafka.ACLPermissionType(perm),
+		Operation:           kafka.ACLOperationType(codes.operation),
+		PermissionType:      kafka.ACLPermissionType(codes.permissionType),
 	}, nil
 }
 
@@ -517,21 +552,10 @@ func aclFromKafka(rt kafka.ResourceType, name string, pt kafka.PatternType, prin
 	}, nil
 }
 
-// wrapACLError maps broker error codes onto the package sentinels. The
+// wrapACLError prefixes err with action and adds the matching sentinel. The
 // original error stays in the chain, so kafka.Error codes still match.
 func wrapACLError(action string, err error) error {
-	switch {
-	case errors.Is(err, kafka.SecurityDisabled):
-		return fmt.Errorf("%s: %w: %w", action, ErrSecurityDisabled, err)
-	case errors.Is(err, kafka.ClusterAuthorizationFailed),
-		errors.Is(err, kafka.TopicAuthorizationFailed),
-		errors.Is(err, kafka.GroupAuthorizationFailed),
-		errors.Is(err, kafka.TransactionalIDAuthorizationFailed),
-		errors.Is(err, kafka.DelegationTokenAuthorizationFailed):
-		return fmt.Errorf("%s: %w: %w", action, ErrNotAuthorized, err)
-	default:
-		return fmt.Errorf("%s: %w", action, err)
-	}
+	return fmt.Errorf("%s: %w", action, classifyBrokerError(err))
 }
 
 // CreateACL creates a single ACL. The ACL is validated first (see

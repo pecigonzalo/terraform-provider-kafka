@@ -25,7 +25,8 @@ type NewTopic struct {
 // asynchronously, so a read straight afterwards can still miss it.
 //
 // kafka-go reports per-topic failures in the response body rather than as the
-// call error; both are returned here. A failure reported by the broker keeps
+// call error; both are returned here. A response with no result for the topic
+// is an error too, because the topic may not exist. A failure reported by the broker keeps
 // its [kafka.Error] in the chain, so callers can match, for example,
 // [kafka.TopicAlreadyExists] with [errors.Is].
 func (c *Client) CreateTopic(ctx context.Context, topic NewTopic) error {
@@ -40,11 +41,12 @@ func (c *Client) CreateTopic(ctx context.Context, topic NewTopic) error {
 	if err != nil {
 		return fmt.Errorf("create topic %q: %w", topic.Name, err)
 	}
-	return joinResponseErrors(resp.Errors, "create topic", nil)
+	return checkResults("create topic", []string{topic.Name}, resp.Errors)
 }
 
 // DeleteTopics deletes the named topics. Failures reported for individual
 // topics are joined into the returned error, ordered by topic name. A topic
+// with no result in the response is a failure too. A topic
 // that does not exist yields an error wrapping [ErrTopicNotFound], so with a
 // single name a caller can treat "already gone" as success:
 //
@@ -57,18 +59,17 @@ func (c *Client) DeleteTopics(ctx context.Context, names ...string) error {
 	if err != nil {
 		return fmt.Errorf("delete topics %q: %w", names, err)
 	}
-	return joinResponseErrors(resp.Errors, "delete topic", func(err error) error {
-		if errors.Is(err, kafka.UnknownTopicOrPartition) {
-			return ErrTopicNotFound
-		}
-		return nil
-	})
+	return checkResults("delete topic", names, resp.Errors)
 }
 
 // ErrIncrementalAlterUnsupported means the broker does not offer incremental
 // alter of configuration, which needs Kafka 2.3 or later.
 var ErrIncrementalAlterUnsupported = errors.New(
 	"the broker does not support incremental alter of configuration; this needs Kafka 2.3 or later")
+
+// incrementalAlterUnsupported marks an unsupported-version error as
+// [ErrIncrementalAlterUnsupported]. It applies only to the alter call.
+var incrementalAlterUnsupported = sentinelRule{kafka.UnsupportedVersion, ErrIncrementalAlterUnsupported}
 
 // AlterTopicConfig changes only the configuration keys that Terraform manages.
 // It sets every key in config. It deletes every key that is in previous and not
@@ -77,7 +78,8 @@ var ErrIncrementalAlterUnsupported = errors.New(
 // uses the incremental alter API (Kafka 2.3 or later) and sends nothing when
 // there is no change.
 //
-// Failures reported per resource are returned too. A topic that does not
+// Failures reported per resource are returned too, and so is a response with no
+// result for the topic. A topic that does not
 // exist yields an error wrapping [ErrTopicNotFound]. A broker without the API
 // yields an error wrapping [ErrIncrementalAlterUnsupported].
 func (c *Client) AlterTopicConfig(ctx context.Context, name string, previous, config map[string]string) error {
@@ -93,32 +95,13 @@ func (c *Client) AlterTopicConfig(ctx context.Context, name string, previous, co
 		}},
 	})
 	if err != nil {
-		return fmt.Errorf("alter config of topic %q: %w", name, classifyAlterError(err))
+		return fmt.Errorf("alter config of topic %q: %w", name, classifyBrokerError(err, incrementalAlterUnsupported))
 	}
-	errs := make(map[string]error, len(resp.Resources))
+	results := make(map[string]error, len(resp.Resources))
 	for _, res := range resp.Resources {
-		if res.Error != nil {
-			errs[res.ResourceName] = res.Error
-		}
+		results[res.ResourceName] = res.Error
 	}
-	return joinResponseErrors(errs, "alter config of topic", func(err error) error {
-		switch {
-		case errors.Is(err, kafka.UnknownTopicOrPartition):
-			return ErrTopicNotFound
-		case errors.Is(err, kafka.UnsupportedVersion):
-			return ErrIncrementalAlterUnsupported
-		}
-		return nil
-	})
-}
-
-// classifyAlterError adds [ErrIncrementalAlterUnsupported] to the chain of an
-// unsupported-version error. Other errors are returned as they are.
-func classifyAlterError(err error) error {
-	if errors.Is(err, kafka.UnsupportedVersion) {
-		return fmt.Errorf("%w: %w", ErrIncrementalAlterUnsupported, err)
-	}
-	return err
+	return checkResults("alter config of topic", []string{name}, results, incrementalAlterUnsupported)
 }
 
 // incrementalConfigs builds the operations for AlterTopicConfig: a set for
@@ -149,26 +132,4 @@ func configEntries(config map[string]string) []kafka.ConfigEntry {
 		entries = append(entries, kafka.ConfigEntry{ConfigName: k, ConfigValue: config[k]})
 	}
 	return entries
-}
-
-// joinResponseErrors joins the non-nil per-name errors of a response, ordered
-// by name. Each is prefixed with action and the name. When classify returns a
-// sentinel for an error, the sentinel is added to the chain next to the
-// original error.
-func joinResponseErrors(errs map[string]error, action string, classify func(error) error) error {
-	var out []error
-	for _, name := range slices.Sorted(maps.Keys(errs)) {
-		err := errs[name]
-		if err == nil {
-			continue
-		}
-		if classify != nil {
-			if sentinel := classify(err); sentinel != nil {
-				out = append(out, fmt.Errorf("%s %q: %w: %w", action, name, sentinel, err))
-				continue
-			}
-		}
-		out = append(out, fmt.Errorf("%s %q: %w", action, name, err))
-	}
-	return errors.Join(out...)
 }

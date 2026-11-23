@@ -1,0 +1,3 @@
+```release-note:bug
+resource/`kafka_topic`: When the broker does not return a result for the topic in a create, change to `configuration` or delete, the provider now gives an error. Before, it treated the missing result as success, although the broker may not have made the change. (#199)
+```

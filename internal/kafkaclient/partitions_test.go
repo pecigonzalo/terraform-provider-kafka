@@ -3,6 +3,7 @@ package kafkaclient
 import (
 	"context"
 	"errors"
+	"math"
 	"net"
 	"testing"
 	"time"
@@ -115,6 +116,8 @@ func TestCreatePartitions_validation(t *testing.T) {
 		{"empty_replica_list", "t", 3, [][]int{{}}},
 		{"duplicate_broker", "t", 3, [][]int{{1, 1}}},
 		{"negative_broker", "t", 3, [][]int{{-1}}},
+		{"broker_above_int32", "t", 3, [][]int{{math.MaxInt32 + 1}}},
+		{"total_above_int32", "t", math.MaxInt32 + 1, [][]int{{1}}},
 		{"uneven_replication", "t", 4, [][]int{{1, 2}, {3}}},
 	}
 	for _, tc := range tests {
@@ -191,6 +194,25 @@ func TestAlterPartitionReassignments_responseErrors(t *testing.T) {
 	}
 }
 
+func TestAlterPartitionReassignments_reportsTopLevelAndPartitionErrors(t *testing.T) {
+	resp := &alterpartitionreassignments.Response{
+		ErrorCode: int16(kafka.RequestTimedOut),
+		Results: []alterpartitionreassignments.ResponseResult{{
+			Name: "t",
+			Partitions: []alterpartitionreassignments.ResponsePartition{
+				{PartitionIndex: 1, ErrorCode: int16(kafka.InvalidReplicaAssignment)},
+			},
+		}},
+	}
+	rt := &partitionsFakeTransport{alter: resp}
+
+	err := newPartitionsClient(t, time.Second, rt).AlterPartitionReassignments(t.Context(), "t",
+		[]PartitionAssignment{{Partition: 1, Replicas: []int{1}}})
+
+	require.ErrorIs(t, err, kafka.RequestTimedOut)
+	assert.ErrorIs(t, err, ErrInvalidReplicaAssignment)
+}
+
 func TestAlterPartitionReassignments_transportErrorAndValidation(t *testing.T) {
 	boom := errors.New("connection reset")
 	c := newPartitionsClient(t, time.Second, &partitionsFakeTransport{err: boom})
@@ -201,6 +223,7 @@ func TestAlterPartitionReassignments_transportErrorAndValidation(t *testing.T) {
 	require.Error(t, c.AlterPartitionReassignments(t.Context(), "", []PartitionAssignment{{Replicas: []int{1}}}))
 	require.Error(t, c.AlterPartitionReassignments(t.Context(), "t", nil))
 	require.Error(t, c.AlterPartitionReassignments(t.Context(), "t", []PartitionAssignment{{Replicas: []int{1, 1}}}))
+	require.Error(t, c.AlterPartitionReassignments(t.Context(), "t", []PartitionAssignment{{Partition: -1, Replicas: []int{1}}}))
 	require.Error(t, c.AlterPartitionReassignments(t.Context(), "t", []PartitionAssignment{
 		{Partition: 0, Replicas: []int{1}}, {Partition: 0, Replicas: []int{2}},
 	}))

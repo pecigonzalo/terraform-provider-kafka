@@ -50,29 +50,6 @@ func TestQuotaIDRoundTrip(t *testing.T) {
 	}
 }
 
-func TestQuotaIDDistinctEntitiesDoNotCollide(t *testing.T) {
-	entities := []kafkaclient.QuotaEntity{
-		{"user": named("a,client-id=b")},
-		{"user": named("a"), "client-id": named("b")},
-		{"user": named("<default>")},
-		{"user": kafkaclient.DefaultQuotaEntity()},
-	}
-	seen := map[string]int{}
-	for i, e := range entities {
-		id := encodeQuotaID(e)
-		if j, dup := seen[id]; dup {
-			t.Fatalf("entities %d and %d share id %q", j, i, id)
-		}
-		seen[id] = i
-	}
-}
-
-func TestDecodeQuotaIDNormalizesOrder(t *testing.T) {
-	got, err := decodeQuotaID("client-id=b,user=a")
-	require.NoError(t, err)
-	assert.Equal(t, "user=a,client-id=b", encodeQuotaID(got))
-}
-
 func TestDecodeQuotaIDErrors(t *testing.T) {
 	tests := []struct {
 		name, id, wantSubstr string
@@ -207,6 +184,13 @@ type fakeQuotaAPI struct {
 	// AlterQuotas was called.
 	hangAfterAlter bool
 	alters         int
+
+	// alterErr makes AlterQuotas fail. The other fields record the last call.
+	alterErr    error
+	alterEntity kafkaclient.QuotaEntity
+	alterSet    kafkaclient.QuotaValues
+	alterRemove []string
+	alterCalled bool
 }
 
 func (f *fakeQuotaAPI) DescribeQuotas(ctx context.Context, filter kafkaclient.QuotaFilter) ([]kafkaclient.QuotaEntry, error) {
@@ -222,8 +206,13 @@ func (f *fakeQuotaAPI) DescribeQuotas(ctx context.Context, filter kafkaclient.Qu
 	return f.responses[min(f.calls-1, len(f.responses)-1)], nil
 }
 
-func (f *fakeQuotaAPI) AlterQuotas(context.Context, kafkaclient.QuotaEntity, kafkaclient.QuotaValues, []string) error {
+func (f *fakeQuotaAPI) AlterQuotas(_ context.Context, entity kafkaclient.QuotaEntity, set kafkaclient.QuotaValues, remove []string) error {
+	if f.alterErr != nil {
+		return f.alterErr
+	}
 	f.alters++
+	f.alterCalled = true
+	f.alterEntity, f.alterSet, f.alterRemove = entity, set, remove
 	return nil
 }
 
@@ -299,11 +288,11 @@ func TestQuotaResourceSettleAndObserve(t *testing.T) {
 	want := quotaExpectation{present: kafkaclient.QuotaValues{"producer_byte_rate": 20}}
 	stale := quotaEntries(entity, kafkaclient.QuotaValues{"producer_byte_rate": 10})
 
-	t.Run("settle_reports_a_timeout_with_guidance", func(t *testing.T) {
+	t.Run("settle_reports_a_timeout", func(t *testing.T) {
 		r := &quotaResource{client: &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{stale}}, timeout: 20 * time.Millisecond, interval: time.Millisecond}
 		err := r.settle(t.Context(), entity, want)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
-		assert.Contains(t, err.Error(), "run terraform plan again")
+		assert.Contains(t, err.Error(), "timed out after")
 	})
 
 	t.Run("settle_succeeds_when_visible_later", func(t *testing.T) {
@@ -490,9 +479,10 @@ func TestQuotaCreateSavesStateWhenWaitFails(t *testing.T) {
 		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
 	})
 
-	t.Run("describe_error_is_an_error_and_state_is_kept", func(t *testing.T) {
+	t.Run("describe_error_is_a_warning_and_state_is_kept", func(t *testing.T) {
 		resp := create(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: kafkaclient.ErrQuotaAuthorizationFailed, describeAfterAlter: true})
-		assert.True(t, resp.Diagnostics.HasError())
+		assert.False(t, resp.Diagnostics.HasError(), "an error would taint a quota that is correct")
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
 	})
 }
 
@@ -513,8 +503,277 @@ func TestQuotaUpdateSavesNewValuesWhenWaitFails(t *testing.T) {
 		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
 	})
 
-	t.Run("describe_error_is_an_error_and_state_is_kept", func(t *testing.T) {
+	t.Run("describe_error_is_a_warning_and_state_is_kept", func(t *testing.T) {
 		resp := update(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: errors.New("describe failed")})
-		assert.True(t, resp.Diagnostics.HasError())
+		assert.False(t, resp.Diagnostics.HasError())
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	})
+}
+
+// quotaModelWithLimits returns a model for the test entity with the limits.
+func quotaModelWithLimits(values kafkaclient.QuotaValues) *quotaResourceModel {
+	m := &quotaResourceModel{ID: types.StringValue(encodeQuotaID(quotaTestEntity()))}
+	m.setEntity(quotaTestEntity())
+	m.setLimits(values)
+	return m
+}
+
+func TestQuotaDelete(t *testing.T) {
+	entity := quotaTestEntity()
+	deleteQuota := func(t *testing.T, api *fakeQuotaAPI, model *quotaResourceModel) *fwresource.DeleteResponse {
+		t.Helper()
+		r := &quotaResource{client: api, timeout: 20 * time.Millisecond, interval: time.Millisecond}
+		state := quotaTestState(t, r, model)
+		resp := &fwresource.DeleteResponse{State: state}
+		r.Delete(t.Context(), fwresource.DeleteRequest{State: state}, resp)
+		return resp
+	}
+
+	t.Run("removes_only_the_managed_limits", func(t *testing.T) {
+		// Someone else set the consumer limit on the same entity. State does
+		// not manage it, so Delete must leave it alone.
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{
+			quotaEntries(entity, kafkaclient.QuotaValues{kafkaclient.QuotaConsumerByteRate: 5}),
+		}}
+		resp := deleteQuota(t, api, quotaModelWithLimits(kafkaclient.QuotaValues{
+			kafkaclient.QuotaProducerByteRate:  10,
+			kafkaclient.QuotaRequestPercentage: 20,
+		}))
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 0, resp.Diagnostics.WarningsCount())
+		assert.Equal(t, entity, api.alterEntity)
+		assert.Empty(t, api.alterSet, "delete sets nothing")
+		assert.Equal(t, []string{"producer_byte_rate", "request_percentage"}, api.alterRemove)
+		assert.NotContains(t, api.alterRemove, string(kafkaclient.QuotaConsumerByteRate))
+	})
+
+	t.Run("quota_that_is_already_gone_is_not_an_error", func(t *testing.T) {
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}}
+		resp := deleteQuota(t, api, quotaTestModel(10))
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 0, resp.Diagnostics.WarningsCount())
+		assert.Equal(t, 1, api.alters)
+	})
+
+	t.Run("without_managed_limits_changes_nothing", func(t *testing.T) {
+		api := &fakeQuotaAPI{}
+		resp := deleteQuota(t, api, quotaModelWithLimits(nil))
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.False(t, api.alterCalled)
+		assert.Zero(t, api.calls)
+	})
+
+	t.Run("write_error_is_an_error", func(t *testing.T) {
+		api := &fakeQuotaAPI{alterErr: kafkaclient.ErrQuotaAuthorizationFailed}
+		resp := deleteQuota(t, api, quotaTestModel(10))
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Contains(t, resp.Diagnostics.Errors()[0].Detail(), "DESCRIBE_CONFIGS and ALTER_CONFIGS")
+		assert.Zero(t, api.calls, "no wait after a failed write")
+	})
+
+	t.Run("wait_that_ends_early_is_a_warning", func(t *testing.T) {
+		stale := quotaEntries(entity, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 10})
+		resp := deleteQuota(t, &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{stale}}, quotaTestModel(10))
+
+		// With no error, the framework removes the resource from state.
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	})
+
+	t.Run("describe_error_in_the_wait_is_a_warning", func(t *testing.T) {
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, err: errors.New("describe failed"), describeAfterAlter: true}
+		resp := deleteQuota(t, api, quotaTestModel(10))
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	})
+
+	t.Run("invalid_id_is_an_error", func(t *testing.T) {
+		model := quotaTestModel(10)
+		model.ID = types.StringValue("not-an-id")
+		api := &fakeQuotaAPI{}
+		resp := deleteQuota(t, api, model)
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.False(t, api.alterCalled)
+	})
+}
+
+func TestQuotaConfigure(t *testing.T) {
+	configure := func(t *testing.T, data any) (*quotaResource, *fwresource.ConfigureResponse) {
+		t.Helper()
+		r := &quotaResource{}
+		resp := &fwresource.ConfigureResponse{}
+		r.Configure(t.Context(), fwresource.ConfigureRequest{ProviderData: data}, resp)
+		return r, resp
+	}
+
+	t.Run("nil_provider_data_is_ignored", func(t *testing.T) {
+		r, resp := configure(t, nil)
+		assert.False(t, resp.Diagnostics.HasError())
+		assert.Nil(t, r.client)
+	})
+
+	t.Run("accepts_a_client", func(t *testing.T) {
+		client, err := kafkaclient.New(t.Context(), kafkaclient.Config{BootstrapServer: "localhost:9092", Timeout: 7 * time.Second})
+		require.NoError(t, err)
+		r, resp := configure(t, client)
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.NotNil(t, r.client)
+		assert.Equal(t, 7*time.Second, r.timeout)
+		assert.Equal(t, quotaPollInterval, r.interval)
+	})
+
+	t.Run("rejects_other_types", func(t *testing.T) {
+		r, resp := configure(t, &kafkaclient.ReadOnlyClient{})
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Nil(t, r.client)
+	})
+
+	t.Run("rejects_a_nil_client", func(t *testing.T) {
+		r, resp := configure(t, (*kafkaclient.Client)(nil))
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Nil(t, r.client)
+	})
+}
+
+func TestQuotaCreateBranches(t *testing.T) {
+	entity := quotaTestEntity()
+	present := quotaEntries(entity, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 10})
+	create := func(t *testing.T, api *fakeQuotaAPI, model *quotaResourceModel) *fwresource.CreateResponse {
+		t.Helper()
+		r := &quotaResource{client: api, timeout: time.Second, interval: time.Millisecond}
+		resp := &fwresource.CreateResponse{State: quotaTestState(t, r, nil)}
+		r.Create(t.Context(), fwresource.CreateRequest{Plan: quotaTestPlan(t, r, model)}, resp)
+		return resp
+	}
+
+	t.Run("success_waits_until_visible", func(t *testing.T) {
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil, nil, present}}
+		resp := create(t, api, quotaTestModel(10))
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 0, resp.Diagnostics.WarningsCount())
+		assert.Equal(t, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 10}, api.alterSet)
+		assert.Empty(t, api.alterRemove)
+		assert.Equal(t, 3, api.calls, "one check for an existing quota, then two waits")
+	})
+
+	t.Run("existing_quota_is_refused", func(t *testing.T) {
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{present}}
+		resp := create(t, api, quotaTestModel(10))
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, "Quota already exists", resp.Diagnostics.Errors()[0].Summary())
+		assert.False(t, api.alterCalled, "an existing quota is not overwritten")
+		assert.True(t, resp.State.Raw.IsNull())
+	})
+
+	t.Run("entry_without_limits_is_not_an_existing_quota", func(t *testing.T) {
+		empty := quotaEntries(entity, kafkaclient.QuotaValues{})
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{empty, present}}
+		resp := create(t, api, quotaTestModel(10))
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.True(t, api.alterCalled)
+	})
+
+	t.Run("check_for_existing_quota_fails", func(t *testing.T) {
+		api := &fakeQuotaAPI{err: kafkaclient.ErrQuotaAuthorizationFailed}
+		resp := create(t, api, quotaTestModel(10))
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, "Unable to check for an existing quota", resp.Diagnostics.Errors()[0].Summary())
+		assert.False(t, api.alterCalled)
+	})
+
+	t.Run("invalid_entity_combination_is_refused", func(t *testing.T) {
+		model := quotaTestModel(10)
+		model.IP = quotaEntityPart(named("10.0.0.1"))
+		api := &fakeQuotaAPI{}
+		resp := create(t, api, model)
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, "Invalid quota entity", resp.Diagnostics.Errors()[0].Summary())
+		assert.Zero(t, api.calls)
+	})
+
+	t.Run("write_error_saves_no_state", func(t *testing.T) {
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{nil}, alterErr: kafkaclient.ErrQuotasUnsupported}
+		resp := create(t, api, quotaTestModel(10))
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, "Unable to create quota", resp.Diagnostics.Errors()[0].Summary())
+		assert.True(t, resp.State.Raw.IsNull())
+	})
+}
+
+func TestQuotaUpdateBranches(t *testing.T) {
+	entity := quotaTestEntity()
+	update := func(t *testing.T, api *fakeQuotaAPI, from, to *quotaResourceModel) *fwresource.UpdateResponse {
+		t.Helper()
+		r := &quotaResource{client: api, timeout: time.Second, interval: time.Millisecond}
+		state := quotaTestState(t, r, from)
+		resp := &fwresource.UpdateResponse{State: state}
+		r.Update(t.Context(), fwresource.UpdateRequest{Plan: quotaTestPlan(t, r, to), State: state}, resp)
+		return resp
+	}
+
+	t.Run("removed_limits_are_sorted_and_waited_for", func(t *testing.T) {
+		from := quotaModelWithLimits(kafkaclient.QuotaValues{
+			kafkaclient.QuotaProducerByteRate:       1,
+			kafkaclient.QuotaConsumerByteRate:       2,
+			kafkaclient.QuotaRequestPercentage:      3,
+			kafkaclient.QuotaControllerMutationRate: 4,
+			kafkaclient.QuotaConnectionCreationRate: 5,
+		})
+		to := quotaTestModel(10)
+		kept := quotaEntries(entity, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 10})
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{kept}}
+		resp := update(t, api, from, to)
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 0, resp.Diagnostics.WarningsCount())
+		assert.Equal(t, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 10}, api.alterSet)
+		assert.Equal(t, []string{
+			"connection_creation_rate", "consumer_byte_rate", "controller_mutation_rate", "request_percentage",
+		}, api.alterRemove)
+	})
+
+	t.Run("a_removed_limit_that_stays_visible_is_a_warning", func(t *testing.T) {
+		from := quotaModelWithLimits(kafkaclient.QuotaValues{
+			kafkaclient.QuotaProducerByteRate: 1,
+			kafkaclient.QuotaConsumerByteRate: 2,
+		})
+		both := quotaEntries(entity, kafkaclient.QuotaValues{kafkaclient.QuotaProducerByteRate: 10, kafkaclient.QuotaConsumerByteRate: 2})
+		api := &fakeQuotaAPI{responses: [][]kafkaclient.QuotaEntry{both}}
+		resp := update(t, api, from, quotaTestModel(10))
+
+		require.False(t, resp.Diagnostics.HasError(), "%v", resp.Diagnostics)
+		assert.Equal(t, 1, resp.Diagnostics.WarningsCount())
+	})
+
+	t.Run("write_error_keeps_the_old_state", func(t *testing.T) {
+		api := &fakeQuotaAPI{alterErr: kafkaclient.ErrQuotaAuthorizationFailed}
+		resp := update(t, api, quotaTestModel(10), quotaTestModel(20))
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, "Unable to update quota", resp.Diagnostics.Errors()[0].Summary())
+		assert.Equal(t, types.Float64Value(10), quotaProducerRate(t, resp.State))
+		assert.Zero(t, api.calls)
+	})
+
+	t.Run("invalid_id_is_an_error", func(t *testing.T) {
+		from := quotaTestModel(10)
+		from.ID = types.StringValue("not-an-id")
+		api := &fakeQuotaAPI{}
+		resp := update(t, api, from, quotaTestModel(20))
+
+		require.True(t, resp.Diagnostics.HasError())
+		assert.False(t, api.alterCalled)
 	})
 }

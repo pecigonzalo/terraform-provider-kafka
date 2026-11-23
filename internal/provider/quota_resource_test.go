@@ -212,12 +212,12 @@ func testAccBrokerAddresses(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	defer func() { _ = client.Close() }()
-	metadata, err := client.Metadata(ctx)
+	brokers, err := client.Brokers(ctx)
 	if err != nil {
 		return nil, err
 	}
-	addresses := make([]string, 0, len(metadata.Brokers))
-	for _, broker := range metadata.Brokers {
+	addresses := make([]string, 0, len(brokers))
+	for _, broker := range brokers {
 		addresses = append(addresses, net.JoinHostPort(broker.Host, strconv.Itoa(broker.Port)))
 	}
 	return addresses, nil

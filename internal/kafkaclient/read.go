@@ -46,8 +46,9 @@ type PartitionInfo struct {
 // TopicInfo describes a topic.
 //
 // Config holds the topic's explicitly set configuration: entries that only
-// reflect broker defaults or static broker configuration are omitted. Sensitive entries with a withheld value are reported as
-// "SENSITIVE". Partitions are ordered by partition ID.
+// reflect broker defaults or static broker configuration are omitted.
+// Sensitive entries with a withheld value are reported as "SENSITIVE".
+// Partitions are ordered by partition ID.
 type TopicInfo struct {
 	Name       string
 	Partitions []PartitionInfo
@@ -74,7 +75,7 @@ func (r *Reader) Topics(ctx context.Context) ([]TopicInfo, error) {
 
 // Brokers returns the brokers registered in the cluster.
 func (r *Reader) Brokers(ctx context.Context) ([]BrokerInfo, error) {
-	md, err := r.Metadata(ctx)
+	md, err := r.metadata(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +102,7 @@ func (r *Reader) BrokerIDs(ctx context.Context) ([]int, error) {
 // topics reads metadata and configuration for names, or for all topics when
 // names is empty. Topics that do not exist are omitted from the result.
 func (r *Reader) topics(ctx context.Context, names []string) ([]TopicInfo, error) {
-	md, err := r.Metadata(ctx, names...)
+	md, err := r.metadata(ctx, names...)
 	if err != nil {
 		return nil, err
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -23,6 +24,12 @@ import (
 
 // topicNameCharsRegexp matches the characters Kafka allows in topic names.
 var topicNameCharsRegexp = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// The error shown when a topic resource or data source runs without a Kafka client.
+const (
+	missingClientSummary = "Missing Kafka client"
+	missingClientDetail  = "The provider did not supply a Kafka client. Please report this issue to the provider developers."
+)
 
 // Ensure provider defined types fully satisfy framework interfaces
 var (
@@ -60,7 +67,6 @@ func (r *topicResource) Metadata(_ context.Context, req resource.MetadataRequest
 
 func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		// This description is used by the documentation generator and the language server.
 		MarkdownDescription: "Kafka Topic resource",
 
 		Attributes: map[string]schema.Attribute{
@@ -111,23 +117,30 @@ func (r *topicResource) Schema(_ context.Context, _ resource.SchemaRequest, resp
 }
 
 func (r *topicResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
-	// Prevent panic if the provider has not been configured.
+	// Terraform calls Configure with no provider data before the provider is configured.
 	if req.ProviderData == nil {
 		return
 	}
 
 	client, ok := req.ProviderData.(*kafkaclient.Client)
-
 	if !ok {
 		resp.Diagnostics.AddError(
 			"Unexpected Resource Configure Type",
 			fmt.Sprintf("Expected *kafkaclient.Client, got: %T. Please report this issue to the provider developers.", req.ProviderData),
 		)
-
 		return
 	}
 
 	r.kafka = client
+}
+
+// clientReady adds an error and returns false if Configure did not set the client.
+func (r *topicResource) clientReady(diags *diag.Diagnostics) bool {
+	if r.kafka == nil {
+		diags.AddError(missingClientSummary, missingClientDetail)
+		return false
+	}
+	return true
 }
 
 // ModifyPlan rejects changes Kafka cannot apply, so they fail at plan time
@@ -180,7 +193,7 @@ func (r *topicResource) validateReplicationFactorAtPlan(ctx context.Context, pla
 	brokerIDs, err := r.kafka.BrokerIDs(ctx)
 	if err != nil {
 		// The cluster may be unreachable during plan; apply repeats this check.
-		tflog.Debug(ctx, fmt.Sprintf("Skipping replication factor plan check: %s", err))
+		tflog.Debug(ctx, "Skipping replication factor plan check", map[string]any{"error": err.Error()})
 		return
 	}
 	if plan.ReplicationFactor.ValueInt64() > int64(len(brokerIDs)) {
@@ -196,14 +209,16 @@ func (r *topicResource) validateReplicationFactorAtPlan(ctx context.Context, pla
 func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var data *TopicResourceModel
 
-	// Read Terraform plan data into the model
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
+	if !r.clientReady(&resp.Diagnostics) {
+		return
+	}
 
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	tflog.Info(ctx, fmt.Sprintf("Creating topic %s", data.Name.ValueString()))
+	tflog.Info(ctx, "Creating topic", map[string]any{"topic": data.Name.ValueString()})
 	err := r.kafka.CreateTopic(ctx, kafkaclient.NewTopic{
 		Name:              data.Name.ValueString(),
 		Partitions:        int(data.Partitions.ValueInt64()),
@@ -211,7 +226,7 @@ func (r *topicResource) Create(ctx context.Context, req resource.CreateRequest, 
 		Config:            configMap(data.Config),
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to create topic, got error: %s", err))
+		resp.Diagnostics.AddError("Unable to create topic", err.Error())
 		return
 	}
 	r.saveCreated(ctx, data, func(ctx context.Context) error {
@@ -232,16 +247,18 @@ func (r *topicResource) saveCreated(ctx context.Context, data *TopicResourceMode
 		)
 	}
 	data.ID = data.Name
-	tflog.Trace(ctx, "Created topic")
+	tflog.Trace(ctx, "Created topic", map[string]any{"topic": data.Name.ValueString()})
 
-	// Save data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
 }
 
 func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var data *TopicResourceModel
 
-	// Read Terraform prior state data into the model
+	if !r.clientReady(&resp.Diagnostics) {
+		return
+	}
+
 	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -254,13 +271,13 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 			resp.State.RemoveResource(ctx)
 			return
 		}
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to read topic, got error: %s", err))
+		resp.Diagnostics.AddError("Unable to read topic", err.Error())
 		return
 	}
 
 	replicationFactor, err := replicaCount(topicInfo)
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to get replica count, got error: %s", err))
+		resp.Diagnostics.AddError("Unable to read topic replication factor", err.Error())
 		return
 	}
 
@@ -280,18 +297,16 @@ func (r *topicResource) Read(ctx context.Context, req resource.ReadRequest, resp
 		data.Config = types.MapValueMust(types.StringType, configElement)
 	}
 
-	// Save updated data into Terraform state
 	resp.Diagnostics.Append(resp.State.Set(ctx, &data)...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
 }
 
 func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// Read Terraform plan data into the model
+	if !r.clientReady(&resp.Diagnostics) {
+		return
+	}
+
 	var data *TopicResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &data)...)
-	// Read Terraform state data into the model
 	var state *TopicResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 
@@ -301,7 +316,7 @@ func (r *topicResource) Update(ctx context.Context, req resource.UpdateRequest, 
 
 	saved, err := newTopicUpdater(r.kafka).update(ctx, *data, *state)
 	if err != nil {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to update topic, got error: %s", err))
+		resp.Diagnostics.AddError("Unable to update topic", err.Error())
 	}
 	// Save what the cluster has now. After a failed step this is the prior
 	// state with the steps that worked already applied.
@@ -325,9 +340,11 @@ func configMap(config types.Map) map[string]string {
 func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	var data *TopicResourceModel
 
-	// Read Terraform prior state data into the model
-	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
+	if !r.clientReady(&resp.Diagnostics) {
+		return
+	}
 
+	resp.Diagnostics.Append(req.State.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -335,7 +352,7 @@ func (r *topicResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	// A topic that is already gone is the desired end state.
 	err := r.kafka.DeleteTopics(ctx, data.Name.ValueString())
 	if err != nil && !errors.Is(err, kafkaclient.ErrTopicNotFound) {
-		resp.Diagnostics.AddError("Client Error", fmt.Sprintf("Unable to delete topic, got error: %s", err))
+		resp.Diagnostics.AddError("Unable to delete topic", err.Error())
 		return
 	}
 }

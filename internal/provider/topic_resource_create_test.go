@@ -57,3 +57,35 @@ func TestTopicResourceSaveCreated(t *testing.T) {
 		assert.Equal(t, int64(3), got.Partitions.ValueInt64())
 	})
 }
+
+func TestTopicResourceWithoutClient(t *testing.T) {
+	// Each operation must report an error and not panic when Configure did
+	// not set the client. The check runs before the request is read, so empty
+	// requests are enough.
+	r := &topicResource{}
+
+	t.Run("create", func(t *testing.T) {
+		resp := &resource.CreateResponse{}
+		r.Create(t.Context(), resource.CreateRequest{}, resp)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, missingClientSummary, resp.Diagnostics.Errors()[0].Summary())
+	})
+	t.Run("read", func(t *testing.T) {
+		resp := &resource.ReadResponse{}
+		r.Read(t.Context(), resource.ReadRequest{}, resp)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, missingClientSummary, resp.Diagnostics.Errors()[0].Summary())
+	})
+	t.Run("update", func(t *testing.T) {
+		resp := &resource.UpdateResponse{}
+		r.Update(t.Context(), resource.UpdateRequest{}, resp)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, missingClientSummary, resp.Diagnostics.Errors()[0].Summary())
+	})
+	t.Run("delete", func(t *testing.T) {
+		resp := &resource.DeleteResponse{}
+		r.Delete(t.Context(), resource.DeleteRequest{}, resp)
+		require.True(t, resp.Diagnostics.HasError())
+		assert.Equal(t, missingClientSummary, resp.Diagnostics.Errors()[0].Summary())
+	})
+}

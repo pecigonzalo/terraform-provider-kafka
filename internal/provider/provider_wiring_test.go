@@ -31,10 +31,10 @@ func TestReplicaCount(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("no_partitions_reports_minus_one", func(t *testing.T) {
-		got, err := replicaCount(kafkaclient.TopicInfo{})
-		require.NoError(t, err)
-		assert.Equal(t, -1, got)
+	t.Run("no_partitions_is_an_error", func(t *testing.T) {
+		_, err := replicaCount(kafkaclient.TopicInfo{Name: "t"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no partitions")
 	})
 }
 

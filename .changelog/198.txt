@@ -1,0 +1,11 @@
+```release-note:bug
+resource/`kafka_topic`: A topic that has no partitions now gives an error. In earlier versions, the state held `replication_factor = -1` for such a topic. (#198)
+```
+
+```release-note:enhancement
+resource/`kafka_topic`: Each error now has its own title, for example `Unable to create topic` and `Unable to read topic`. In earlier versions, all of them had the title `Client Error`. The error text is now the detail of the error. (#198)
+```
+
+```release-note:enhancement
+data-source/`kafka_topic`: Each error now has its own title, for example `Unable to read topic`. In earlier versions, all of them had the title `Client Error`. (#198)
+```

@@ -16,9 +16,9 @@ const (
 	// does not match state yet.
 	readSettleInterval = 300 * time.Millisecond
 
-	// readSettleWindow bounds how long Read keeps re-reading. Brokers were
-	// observed to lag for around a second; a difference that is still there
-	// after this window is treated as a real change.
+	// readSettleWindow limits how long Read keeps re-reading. Brokers were
+	// seen to lag for about one second. A difference that is still there
+	// after this window is a real change.
 	readSettleWindow = 5 * time.Second
 )
 
